@@ -1,0 +1,10 @@
+accelerate
+mindnlp>=0.5.1
+transformers
+torch>=2.9.0
+gradio
+markdown
+pyyaml
+latex2mathml
+markdown
+openi

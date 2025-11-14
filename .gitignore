@@ -1,0 +1,7 @@
+tokenizer/
+llm/
+video_model/
+resources/
+.idea/
+__pycache__/
+openi_resource.version

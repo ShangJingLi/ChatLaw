@@ -1,0 +1,14 @@
+# 目标服务器 IP
+SERVER_IP: "192.168.137.99"
+# 心跳端口
+HEARTBEAT_PORT: 6005
+# 数据传输端口
+DATA_PORT: 6006
+# 心跳发送间隔
+HB_INTERVAL: 1.0
+# 心跳超时判定阈值
+HB_TIMEOUT: 3.0
+# 客户端一字节确认
+DATA_HANDSHAKE_REQ: 'A5'
+# 服务器回发
+DATA_HANDSHAKE_RESP: '5A'
