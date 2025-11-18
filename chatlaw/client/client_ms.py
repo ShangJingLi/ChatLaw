@@ -1,5 +1,3 @@
-# client_ms.py
-
 import time
 import threading
 import binascii
@@ -8,7 +6,7 @@ import gradio as gr
 import markdown
 from transformers import AutoTokenizer
 
-from configuration import config
+from chatlaw.configuration import config
 
 # MindNLP 工具函数
 from chatlaw.client.utils.utils_ms import (
@@ -161,7 +159,7 @@ with gr.Blocks(
     """
 ) as demo:
 
-    gr.Markdown("## 🔗 Qwen 模型客户端（MINDNLP版）")
+    gr.Markdown("## 🔗 Qwen 模型客户端（MindNLP版）")
 
     inp = gr.Textbox(label="输入文本", lines=2, placeholder="请输入内容...")
     status_box = gr.Textbox(label="连接与状态信息", interactive=False)

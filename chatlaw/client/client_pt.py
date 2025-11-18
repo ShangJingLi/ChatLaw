@@ -5,15 +5,15 @@ import binascii
 import gradio as gr
 import markdown
 from transformers import AutoTokenizer
-from configuration import config
-
-# 工具函数
+from chatlaw.client.utils.common_utils import (recv_exact,
+                                               render_mathml_from_latex,
+                                               connection_acknowledgement)
+from chatlaw.configuration import config
 from chatlaw.client.utils.utils_pt import (
     heartbeat_client,
     stream_from_server,
 )
-from utils.common_utils import recv_exact, render_mathml_from_latex, connection_acknowledgement
-from chatlaw.client.dataloader import download_resources
+from chatlaw.dataloader import download_resources
 from launcher import get_resources_path
 
 

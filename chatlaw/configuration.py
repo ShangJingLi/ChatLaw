@@ -4,8 +4,9 @@ import ast
 import argparse
 from pprint import pformat
 import yaml
+from launcher import get_project_root
 
-_config_path = os.path.join("config.yaml")
+_config_path = os.path.join(get_project_root(), "config.yaml")
 
 
 class Config:
