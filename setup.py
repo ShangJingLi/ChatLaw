@@ -4,7 +4,7 @@ import os
 def read_requirements():
     if not os.path.exists("requirements.txt"):
         return []
-    with open("requirements.txt") as f:
+    with open("requirements.txt", encoding="utf-8") as f:
         return [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
 setup(
@@ -13,28 +13,21 @@ setup(
 
     packages=find_packages(include=["chatlaw", "chatlaw.*"]),
 
+    # 递归包含 chatlaw 目录下的所有文件
     package_data={
-        "chatlaw": [
-            "client/*.py",
-            "server/*.py"
-        ]
+        "chatlaw": ["**/*"],
     },
 
     include_package_data=True,
     install_requires=read_requirements(),
 
-    # 两个可执行命令：
-    #   chatlaw         → 正常运行入口
-    #   chatlaw-uninstall-hook → pip uninstall 时自动执行
     entry_points={
         "console_scripts": [
             "chatlaw = launcher:main",
-            "chatlaw-uninstall-hook = chatlaw_uninstall:main",
         ],
     },
 
     py_modules=[
         "launcher",
-        "chatlaw_uninstall"
     ],
 )

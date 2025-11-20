@@ -1,28 +1,23 @@
+import os
 import time
 import threading
 import binascii
-
 import gradio as gr
 import markdown
 from transformers import AutoTokenizer
-
 from chatlaw.configuration import config
-
-# MindNLP 工具函数
 from chatlaw.client.utils.utils_ms import (
     heartbeat_client_ms,
     stream_from_server_ms,
 )
-
 from chatlaw.client.utils.common_utils import (
     recv_exact,
     render_mathml_from_latex,
     connection_acknowledgement,
 )
+from chatlaw.dataloader import download_resources
+from launcher import get_resources_path
 
-# ============================
-# 全局状态（供 utils_ms 调用）
-# ============================
 alive = True
 stop_event = threading.Event()
 
@@ -30,18 +25,54 @@ stop_event = threading.Event()
 def alive_flag():
     return alive
 
+resource_path = get_resources_path()
+download_resources(resource_type="tokenizer")
+tokenizer_path = os.path.join(resource_path, "tokenizer").replace("\\", "/")
+tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
 
-# ============================
-# 加载 tokenizer
-# ============================
-model_name = "Qwen/Qwen3-4B-Instruct-2507"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-
-# ============================
-# Gradio 回调函数
-# ============================
 def gradio_interface_fn(input_text):
+    """
+    功能：
+        Gradio 的核心回调函数，负责：
+        1. 启动与服务器的心跳监控；
+        2. 将用户输入封装为模型输入格式（numpy 张量）；
+        3. 执行一次短连接握手验证服务器是否在线；
+        4. 建立推理连接并通过流式协议持续接收模型输出；
+        5. 将增量输出渲染为 Markdown + MathML，并逐步发送到前端；
+        6. 处理推理中断（STOP）以及异常情况。
+
+        本函数为一个 Python generator，每次 yield 会推动 Gradio 更新界面。
+
+    Args:
+        input_text (str): 用户在前端输入的自然语言文本。
+
+    Inputs:
+        - **input_text**: 用户输入内容。
+        - 全局依赖：
+            - **alive**: 控制心跳线程继续执行的标志。
+            - **stop_event**: 用于推理中断的事件对象。
+            - **tokenizer**: 用于生成模型输入的 tokenizer。
+            - **heartbeat_client_ms**: 心跳线程函数。
+            - **connection_acknowledgement**: 测试短连是否成功的函数。
+            - **stream_from_server_ms**: 流式推理接收器。
+            - **render_mathml_from_latex**: 将 Markdown 输出中的 LaTeX 转换为 MathML。
+            - **markdown.markdown**: 渲染 Markdown。
+
+    Outputs:
+        作为一个生成器 (generator)：
+            yield 两个值：(status_text, html_output)
+            例如：
+                - "🟡 正在建立连接...", ""
+                - "🟢 推理中...", "<html>...</html>"
+                - "🛑 推理已中断。", "<html>...</html>"
+                - "✅ 推理完成。", "<html>...</html>"
+
+        这些值会逐步通过 Gradio 输出到界面。
+
+    Raises:
+        本函数不向外抛出异常。
+        若在连接或推理过程中出现错误，将 yield `"⚠️ 数据接收异常：xxx"` 并结束函数。
+    """
     global alive
     alive = True
     stop_event.clear()
@@ -133,17 +164,11 @@ def gradio_interface_fn(input_text):
         time.sleep(0.5)
 
 
-# ============================
-# 停止回调
-# ============================
 def stop_fn():
     stop_event.set()
     return "🛑 已发送停止信号给服务器", ""
 
 
-# ============================
-# Gradio UI
-# ============================
 with gr.Blocks(
     title="Qwen 模型客户端（UI + 流式输出）",
     css="""
@@ -176,4 +201,4 @@ with gr.Blocks(
 
 if __name__ == "__main__":
     demo.queue()
-    demo.launch()
+    demo.launch(inbrowser=True)

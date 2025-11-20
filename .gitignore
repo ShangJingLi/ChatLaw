@@ -6,3 +6,4 @@ resources/
 __pycache__/
 openi_resource.version
 chatlaw.egg-info/
+build/

@@ -25,24 +25,58 @@ stop_event = threading.Event()  # STOP 信号
 def alive_flag():
     return alive
 
-
-# ========== Tokenizer 准备 ==========
 resource_path = get_resources_path()
-model_name = "Qwen/Qwen3-4B-Instruct-2507"
-
-if not os.path.exists(os.path.join(resource_path, "tokenizer")):
-    download_resources(resource_type="tokenizer")
-
+download_resources(resource_type="tokenizer")
 tokenizer_path = os.path.join(resource_path, "tokenizer").replace("\\", "/")
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
 
 
-# ============================
-# Gradio 回调函数
-# ============================
 def gradio_interface_fn(input_text):
     """
-    每次点击“发送”都会进入一次生成器序列。
+    功能：
+        Gradio 的核心回调生成器函数，每次用户点击“发送”按钮都会触发一次新的推理流程。
+        本函数负责：
+        1. 启动心跳线程，确保服务器连接存活；
+        2. 将用户输入封装为模型可处理的 prompt；
+        3. 通过一次短连接检测服务器是否可用；
+        4. 与服务器建立数据连接并进行流式推理接收；
+        5. 在推理过程中持续向前端 UI 发送增量渲染结果；
+        6. 在 STOP 中断、错误、或服务器返回 <END> 时进行收尾处理。
+
+        该函数是一个 Python generator，每一次 `yield` 都会促使 Gradio 立即更新界面，
+        用于实现实时流式输出效果。
+
+    Args:
+        input_text (str): 用户输入的自然语言文本，将作为问询内容或 prompt。
+
+    Inputs:
+        - **input_text**: 前端用户输入的文本内容。
+        - 全局依赖：
+            - **alive** (bool): 控制心跳线程继续运行的标志。
+            - **stop_event** (Event): 前端用于停止推理的事件信号。
+            - **tokenizer**: 构造模型输入的 tokenizer。
+            - **heartbeat_client**: 心跳线程函数，用于维护与服务器的存活性检测。
+            - **connection_acknowledgement**: 用于短连接测试服务器是否在线。
+            - **stream_from_server**: 流式推理数据接收器。
+            - **render_mathml_from_latex**: 将 Markdown 中的公式转换为 MathML。
+            - **markdown.markdown**: 渲染 Markdown 文本。
+
+    Outputs:
+        作为一个生成器（generator），本函数多次 yield：
+            (状态文本, HTML渲染内容)
+        示例：
+            - ("🟡 正在建立连接...", "")
+            - ("🟢 推理中...", "<html>渲染内容</html>")
+            - ("🛑 推理已中断。", "<html>最终渲染</html>")
+            - ("⚠️ 数据接收异常：xxx", "")
+            - ("✅ 推理完成。", "<html>最终渲染</html>")
+
+        这些值将被 Gradio 自动逐段渲染到 UI 中，实现实时输出体验。
+
+    Raises:
+        本函数不向外抛出异常。
+        所有连接异常、推理异常等均以 yield 的形式返回给前端，
+        格式为："⚠️ 数据接收异常：xxx"。
     """
     global alive
     alive = True
@@ -142,17 +176,11 @@ def gradio_interface_fn(input_text):
         time.sleep(0.5)  # 给心跳线程一点时间退出
 
 
-# ============================
-# 停止按钮
-# ============================
 def stop_fn():
     stop_event.set()
     return "🛑 已发送停止信号到服务器", ""
 
 
-# ============================
-# Gradio UI
-# ============================
 with gr.Blocks(
     title="Qwen 模型客户端（Transformers 版）",
     css="""
@@ -185,4 +213,4 @@ with gr.Blocks(
 
 if __name__ == "__main__":
     demo.queue()
-    demo.launch()
+    demo.launch(inbrowser=True)
