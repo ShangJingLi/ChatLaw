@@ -1,0 +1,9 @@
+#!/bin/bash
+
+git remote set-url origin git@gitee.com:lishangjing2024/ChatLaw.git
+git push
+git remote set-url origin git@openi.pcl.ac.cn:enter/ChatLaw.git
+git push
+git remote set-url origin git@github.com:ShangJingLi/ChatLaw.git
+git push
+git remote set-url origin git@gitee.com:lishangjing2024/ChatLaw.git
