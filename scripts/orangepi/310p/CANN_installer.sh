@@ -27,7 +27,7 @@ cd /home/HwHiAiUser/Downloads || {
 cd /home/HwHiAiUser/Downloads || exit
 
 openi model download enter/nodule_segmentation cann-toolkit --save_path .
-openi model download enter/nodule_segmentation cann-kernels --save_path .
+openi model download enter/nodule_segmentation cann-kernels_310p --save_path .
 
 export TOOLKIT_NAME=$(python -c "import os;import fnmatch;prefix_toolkit='Ascend-cann-toolkit'; extension='.run';found_toolkit = any(f.startswith(prefix_toolkit) and f.endswith(extension) for f in os.listdir('.')); toolkit_path = next((f for f in os.listdir(os.getcwd()) if fnmatch.fnmatch(f, 'Ascend-cann-toolkit*')), None); print(toolkit_path)")
 export KERNELS_NAME=$(python -c "import os;import fnmatch;prefix_kernels='Ascend-cann-kernels';extension='.run';found_kernels = any(f.startswith(prefix_kernels) and f.endswith(extension) for f in os.listdir('.'));kernels_path = next((f for f in os.listdir(os.getcwd()) if fnmatch.fnmatch(f, 'Ascend-cann-kernels*')), None);print( kernels_path);")
