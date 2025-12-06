@@ -7,3 +7,6 @@ __pycache__/
 openi_resource.version
 chatlaw.egg-info/
 build/
+
+# 开发环境资源目录
+develop/resources/
