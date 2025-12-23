@@ -363,15 +363,24 @@ def execute():
             stopping = StoppingCriteriaList([StopNow(stop_flag)])
 
             # ---- 生成参数 ----
-            gen_kwargs = dict(
-                **fixed,
-                streamer=streamer,
-                max_new_tokens=4096,
-                temperature=0.7,
-                do_sample=True,
-                stopping_criteria=stopping,
-            )
-
+            if USE_ORANGE_PI:
+                gen_kwargs = dict(
+                    **fixed,
+                    streamer=streamer,
+                    max_new_tokens=4096,
+                    temperature=0.7,
+                    do_sample=True,
+                    stopping_criteria=stopping,
+                )
+            else:
+                gen_kwargs = dict(
+                    **fixed,
+                    streamer=streamer,
+                    max_new_tokens=512,
+                    temperature=0.7,
+                    do_sample=True,
+                    stopping_criteria=stopping,
+                )
             # ---- generate 线程 ----
             gen_thread = threading.Thread(
                 target=safe_generate,       # 已适配新版本签名

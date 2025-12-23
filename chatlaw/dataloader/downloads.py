@@ -1,17 +1,71 @@
 import os
 import openi
 from launcher import get_resources_path
+from typing import List
+
+video_model_list = [""]
+
+llm_list = ["config.json",
+            "generation_config.json",
+            "model.safetensors.index.json",
+            "model-00001-of-00003.safetensors",
+            "model-00002-of-00003.safetensors",
+            "model-00003-of-00003.safetensors",]
+
+tokenizer_list = ["merges.txt",
+                  "tokenizer.json",
+                  "tokenizer_config.json",
+                  "vocab.json",]
 
 
 def download_resources(resource_type):
+    """
+        根据缺少的文件通过启智社区下载补齐。
+
+        Args:
+            resource_type (str): 要下载的文件类型
+
+        Returns:
+            bool:
+                True  - 目录存在且所有文件齐全
+                False - 目录不存在，或缺少任意文件
+        """
     if resource_type not in ("tokenizer", "llm", "video_model"):
         raise ValueError("Arg 'resource_type' must be in (tokenizer, llm, video_model)")
-    if resource_type == "tokenizer":
+    if resource_type == "tokenizer" and not check_files_complete("tokenizer", tokenizer_list):
         openi.openi_download_file("enter/QwenTokenizer", repo_type="dataset" , local_dir=get_resources_path(), max_workers=10)
-    elif resource_type == "llm":
+    elif resource_type == "llm" and not check_files_complete("llm", llm_list):
         openi.openi_download_file("enter/QwenModel", repo_type="model", local_dir=os.path.join(get_resources_path(), "llm"), max_workers=10)
-    elif resource_type == "video_model":
+    elif resource_type == "video_model" and not check_files_complete("video_model", video_model_list):
         openi.openi_download_file("enter/VoskModel", repo_type="dataset", local_dir=get_resources_path(), max_workers=10)
+    else:
+        pass
+
+
+def check_files_complete(resource_type: str, required_files: List[str]) -> bool:
+    """
+    检查目录是否存在，且目录下是否包含所需的全部文件。
+
+    Args:
+        resource_type (str): 要检查的文件类型
+        required_files (List[str]): 必须存在的文件名列表（仅文件名，不含路径）
+
+    Returns:
+        bool:
+            True  - 目录存在且所有文件齐全
+            False - 目录不存在，或缺少任意文件
+    """
+    # 目录是否存在
+    if not os.path.isdir(os.path.join(get_resources_path(), resource_type)):
+        return False
+
+    # 检查文件是否齐全
+    for filename in required_files:
+        file_path = os.path.join(os.path.join(get_resources_path(), resource_type), filename)
+        if not os.path.isfile(file_path):
+            return False
+
+    return True
 
 
 __all__ = ["download_resources"]

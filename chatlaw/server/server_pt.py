@@ -71,12 +71,24 @@ tokenizer_path = os.path.join(resource_path, "tokenizer").replace("\\", "/")
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
 
 model_path = os.path.join(resource_path, "llm").replace("\\", "/")
-model = AutoModelForCausalLM.from_pretrained(
-    model_path,
-    local_files_only=True,
-    dtype="auto",
-    device_map=device_map
-)
+if device_map == "npu":
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        local_files_only=True,
+        dtype="auto",
+        device_map=device_map
+    )
+else:
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        local_files_only=True,
+        device_map="auto",  # ★ 保留 auto
+        dtype="auto",
+        attn_implementation="sdpa",
+        max_memory={0: "15GiB"},
+    )
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.set_float32_matmul_precision("high")
 print("[Model] Qwen loaded successfully.")
 
 
@@ -349,15 +361,25 @@ def stream_generate(model_inputs):
         input_ids=input_ids,
         attention_mask=attention_mask,
         streamer=streamer,
-        max_new_tokens=16384,
+        max_new_tokens=4096,
         temperature=0.7,
         do_sample=True,
         stopping_criteria=StoppingCriteriaList([StopFlagCriteria(stop_flag)]),  # ★ 加上这一行
     )
 
     # 生成线程（异步）
-    thread = threading.Thread(target=model.generate, kwargs=generation_kwargs)
+    def _run_generate():
+        if device == "cuda":
+            with torch.inference_mode(), torch.autocast("cuda"):
+                model.generate(**generation_kwargs)
+        else:
+            with torch.inference_mode():
+                model.generate(**generation_kwargs)
+
+    thread = threading.Thread(target=_run_generate)
     thread.start()
+    # thread = threading.Thread(target=model.generate, kwargs=generation_kwargs)
+    # thread.start()
 
 
     # 正确的流式返回：只发送“新增文本”
