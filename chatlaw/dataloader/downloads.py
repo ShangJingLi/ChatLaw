@@ -1,7 +1,7 @@
 import os
+from typing import List
 import openi
 from launcher import get_resources_path
-from typing import List
 
 llm_list = ["config.json",
             "generation_config.json",

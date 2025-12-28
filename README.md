@@ -72,7 +72,7 @@ ___
 ## 软件架构
 ### 1.项目目录（随项目开发更新）
 ```
-ChatLaw/
+ChatLaw
     ├── chatlaw
     │   ├── clear_files.py
     │   ├── client
@@ -91,8 +91,6 @@ ChatLaw/
     │   │   └── __init__.py
     │   ├── __init__.py
     │   └── server
-    │       ├── dataloader
-    │       │   └── __init__.py
     │       ├── __init__.py
     │       ├── server_ms.py
     │       └── server_pt.py
@@ -102,6 +100,7 @@ ChatLaw/
     │   │   ├── extract_law_pure_regex.py
     │   │   ├── extract_regex_llm_repair.py
     │   │   ├── extract_sliding_window.py
+    │   │   ├── law_pdf_to_json.py
     │   │   ├── requirements.txt
     │   │   └── verify_extraction.py
     │   └── README.md

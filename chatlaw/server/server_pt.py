@@ -43,7 +43,7 @@ if hasattr(torch, "npu"):
 
 if use_npu:
     try:
-        import torch_npu
+        import torch_npu  # pylint: disable=unused-import
         device = "npu"
         device_map = {"": torch.npu.current_device()}
         print("[Backend] Using Ascend NPU backend.")

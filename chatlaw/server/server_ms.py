@@ -23,7 +23,7 @@ device_map = "auto"
 USE_ORANGE_PI = False
 
 try:
-    user = subprocess.run(["whoami"], capture_output=True, text=True).stdout.strip()
+    user = subprocess.run(["whoami"], capture_output=True, text=True, check=True).stdout.strip()
     context.set_context(mode=context.GRAPH_MODE)
 
     if user == "HwHiAiUser":
