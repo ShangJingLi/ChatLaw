@@ -14,6 +14,10 @@ def get_resources_path():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "chatlaw", "resources")
 
 
+def get_development_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "develop")
+
+
 def resolve_script_path(role, mode):
     """
     功能：

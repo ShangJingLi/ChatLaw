@@ -11,3 +11,7 @@ openi
 funasr_onnx
 soundfile
 librosa
+langchain
+langchain-community
+langchain-huggingface
+faiss-cpu
