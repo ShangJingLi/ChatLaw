@@ -5,6 +5,7 @@ import binascii
 import gradio as gr
 import markdown
 from transformers import AutoTokenizer
+from funasr_onnx import Paraformer
 from chatlaw.configuration import config
 from chatlaw.client.utils.utils_ms import (
     heartbeat_client_ms,
@@ -14,6 +15,7 @@ from chatlaw.client.utils.common_utils import (
     recv_exact,
     render_mathml_from_latex,
     connection_acknowledgement,
+    speech_to_text
 )
 from chatlaw.dataloader import download_resources
 from launcher import get_resources_path
@@ -30,7 +32,19 @@ download_resources(resource_type="tokenizer")
 tokenizer_path = os.path.join(resource_path, "tokenizer").replace("\\", "/")
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
 
-def gradio_interface_fn(input_text):
+download_resources(resource_type="audio_model")
+AUDIO_MODEL_DIR = os.path.join(resource_path, "audio_model").replace("\\", "/")
+TARGET_SR = 16000
+AUDIO_CACHE_DIR = os.path.join(get_resources_path(), "_asr_cache")  # 语音临时文件目录
+os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
+audio_model = Paraformer(
+    AUDIO_MODEL_DIR,
+    batch_size=1,
+    quantize=True,   # 使用 model_quant.onnx
+    device_id=-1     # CPU-only
+)
+
+def gradio_interface_fn(input_audio, input_text):
     """
     功能：
         Gradio 的核心回调函数，负责：
@@ -44,6 +58,7 @@ def gradio_interface_fn(input_text):
         本函数为一个 Python generator，每次 yield 会推动 Gradio 更新界面。
 
     Args:
+        input_audio : 用户录入语音，将作为问询内容或 prompt。
         input_text (str): 用户在前端输入的自然语言文本。
 
     Inputs:
@@ -61,11 +76,14 @@ def gradio_interface_fn(input_text):
     Outputs:
         作为一个生成器 (generator)：
             yield 两个值：(status_text, html_output)
-            例如：
-                - "🟡 正在建立连接...", ""
-                - "🟢 推理中...", "<html>...</html>"
-                - "🛑 推理已中断。", "<html>...</html>"
-                - "✅ 推理完成。", "<html>...</html>"
+            示例：
+                - ("🟡 正在建立连接...", "")
+                - ("⌛️ 语音处理中...", "")
+                - ("⌛️ 知识库检索中...", "")
+                - ("🟢 推理中...", "<html>渲染内容</html>")
+                - ("🛑 推理已中断。", "<html>最终渲染</html>")
+                - ("⚠️ 数据接收异常：xxx", "")
+                - ("✅ 推理完成。", "<html>最终渲染</html>")
 
         这些值会逐步通过 Gradio 输出到界面。
 
@@ -73,6 +91,29 @@ def gradio_interface_fn(input_text):
         本函数不向外抛出异常。
         若在连接或推理过程中出现错误，将 yield `"⚠️ 数据接收异常：xxx"` 并结束函数。
     """
+    # ===== 语音 / 文本 二选一校验 =====
+    has_audio = input_audio is not None
+    has_text = input_text is not None and input_text.strip() != ""
+
+    if not has_audio and not has_text:
+        yield "⚠️ 请输入语音或文本！", ""
+        return
+
+    if has_audio and has_text:
+        yield "⚠️ 请勿同时输入语音和文本！", ""
+        return
+
+    # 只有语音输入：先做 ASR
+    if has_audio:
+        yield "⌛️ 语音处理中...", ""
+        input_text = speech_to_text(
+            audio=input_audio,
+            audio_model=audio_model,
+            audio_cache_dir=AUDIO_CACHE_DIR,
+            target_sr=TARGET_SR
+        )
+    # 只有文本输入：直接使用 input_text
+
     global alive
     alive = True
     stop_event.clear()
@@ -185,8 +226,13 @@ with gr.Blocks(
 ) as demo:
 
     gr.Markdown("## 🔗 Qwen 模型客户端（MindNLP版）")
+    audio_inp = gr.Audio(
+        sources=["microphone"],
+        type="numpy",
+        label="中文语音输入（请说完整一句话）"
+    )
 
-    inp = gr.Textbox(label="输入文本", lines=2, placeholder="请输入内容...")
+    text_inp = gr.Textbox(label="输入文本", lines=2, placeholder="请输入内容...")
     status_box = gr.Textbox(label="连接与状态信息", interactive=False)
 
     with gr.Row():
@@ -195,7 +241,7 @@ with gr.Blocks(
 
     output_box = gr.HTML(label="模型输出", elem_id="model_output")
 
-    btn_send.click(gradio_interface_fn, inputs=inp, outputs=[status_box, output_box])
+    btn_send.click(gradio_interface_fn, inputs=[audio_inp, text_inp], outputs=[status_box, output_box])
     btn_stop.click(stop_fn, inputs=None, outputs=[status_box, output_box])
 
 

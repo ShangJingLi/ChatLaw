@@ -85,7 +85,6 @@ else:
         device_map="auto",  # ★ 保留 auto
         dtype="auto",
         attn_implementation="sdpa",
-        max_memory={0: "15GiB"},
     )
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.set_float32_matmul_precision("high")
