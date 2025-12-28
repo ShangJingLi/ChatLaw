@@ -117,7 +117,6 @@ def gradio_interface_fn(input_audio, input_text):
             target_sr=TARGET_SR
         )
     # 只有文本输入：直接使用 input_text
-    print(input_text + "*结束")
 
     global alive
     alive = True
@@ -162,8 +161,7 @@ def gradio_interface_fn(input_audio, input_text):
 
         if not status:
             alive = False
-            yield "❌ 服务器连接失败", ""
-            raise GeneratorExit
+            return
 
         yield "✅ 已连接服务器，开始推理...", ""
 
@@ -260,5 +258,4 @@ with gr.Blocks(
 
 
 if __name__ == "__main__":
-    demo.queue()
     demo.launch(inbrowser=True)
