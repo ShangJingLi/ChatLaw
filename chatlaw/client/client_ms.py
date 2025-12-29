@@ -219,7 +219,7 @@ def stop_fn():
 
 
 with gr.Blocks(
-    title="Qwen 模型客户端（UI + 流式输出）",
+    title="ChatLaw 客户端（UI + 流式输出）",
     css="""
         #model_output {
           border: 2px solid #ccc;
@@ -233,7 +233,7 @@ with gr.Blocks(
     """
 ) as demo:
 
-    gr.Markdown("## 🔗 Qwen 模型客户端（MindNLP版）")
+    gr.Markdown("## 🔗 ChatLaw 客户端（MindNLP版）")
     audio_inp = gr.Audio(
         sources=["microphone"],
         type="numpy",

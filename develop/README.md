@@ -59,7 +59,7 @@ LLM 批量结构化（提取 article_number, content, title）
 1. **安装依赖**
    ```bash
    cd RAG
-   pip install -r requirements.txt
+   pip install -r developer_requirements.txt
    ```
 
 2. **下载模型**（约 15GB）

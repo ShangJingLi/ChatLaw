@@ -21,8 +21,8 @@ def main():
     targets = [
         "tokenizer",
         "llm",
-        "video_model",
-        "RAG",
+        "audio_model",
+        "vectorstore",
         "openi_resource.version",
     ]
 

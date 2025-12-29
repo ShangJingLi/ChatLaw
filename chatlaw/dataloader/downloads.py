@@ -24,6 +24,9 @@ audio_model_list = [".mdl",
                     "model_quant.onnx",
                     "tokens.json"]
 
+vectorstore_list = ["index.faiss",
+                    "index.pkl"]
+
 
 def download_resources(resource_type):
     """
@@ -37,10 +40,9 @@ def download_resources(resource_type):
                 True  - 目录存在且所有文件齐全
                 False - 目录不存在，或缺少任意文件
         """
-    if resource_type not in ("tokenizer", "llm", "audio_model"):
-        raise ValueError("Arg 'resource_type' must be in (tokenizer, llm, audio_model)")
+    if resource_type not in ("tokenizer", "llm", "audio_model", "vectorstore"):
+        raise ValueError("Arg 'resource_type' must be in (tokenizer, llm, audio_model)", "vectorstore")
     if resource_type == "tokenizer" and check_files_complete("tokenizer", tokenizer_list) is False:
-        print(check_files_complete("tokenizer", tokenizer_list))
         openi.openi_download_file("enter/QwenTokenizer",
                                   repo_type="dataset" ,
                                   local_dir=get_resources_path(),
@@ -51,11 +53,16 @@ def download_resources(resource_type):
                                   local_dir=os.path.join(get_resources_path(), "llm"),
                                   max_workers=10)
     elif resource_type == "audio_model" and check_files_complete("audio_model", audio_model_list) is False:
-        print(check_files_complete("audio_model", audio_model_list))
         openi.openi_download_file("enter/Paraformer",
                                   repo_type="dataset",
                                   local_dir=os.path.join(get_resources_path(), "audio_model"),
                                   max_workers=10)
+    elif resource_type == "vectorstore" and check_files_complete("vectorstore", vectorstore_list) is False:
+        openi.openi_download_file(
+            "enter/vectorstore",
+            repo_type="dataset",
+            local_dir=os.path.join(get_resources_path(), "vectorstore"),
+            max_workers=10)
     else:
         pass
 

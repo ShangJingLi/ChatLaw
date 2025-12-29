@@ -8,3 +8,4 @@ openi_resource.version
 chatlaw.egg-info/
 build/
 _asr_cache/
+*.zip

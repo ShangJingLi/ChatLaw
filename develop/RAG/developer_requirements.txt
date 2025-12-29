@@ -1,0 +1,23 @@
+pymupdf
+transformers
+torch>=2.9.0
+accelerate
+bitsandbytes       # 4bit 量化支持（Windows 需要特殊安装）
+tqdm
+sentence-transformers
+mindnlp>=0.5.1
+torch
+markdown
+pyyaml
+latex2mathml
+openi
+jieba
+gradio==5.49.1
+markdown
+funasr_onnx
+soundfile
+librosa
+langchain
+langchain-community
+langchain-huggingface
+faiss-cpu

@@ -9,6 +9,7 @@ from langchain_community.vectorstores import FAISS
 import soundfile as sf
 import librosa
 from latex2mathml.converter import convert as latex_to_mathml
+from launcher import get_resources_path
 
 
 def recv_exact(conn, n, timeout=None):
@@ -220,8 +221,12 @@ def speech_to_text(audio, target_sr, audio_cache_dir, audio_model):
 
 def load_vectorstore(path):
     embeddings = HuggingFaceEmbeddings(
-        model_name="BAAI/bge-base-zh-v1.5",
-        encode_kwargs={"normalize_embeddings": True}
+        model_name=os.path.join(
+            get_resources_path(),
+            "vectorstore",
+            "embedding_model"
+        ),
+        encode_kwargs={"normalize_embeddings": True},
     )
 
     vectorstore = FAISS.load_local(
@@ -248,11 +253,12 @@ def build_prompt(question, docs):
 
     context = "\n\n".join(blocks)
 
-    return f"""你会遇到以下两种情况：1.用户的问题与法律问题无关。 2.用户的问题与法律问题有关
-               如果是情况1，则忽略法律条文，直接回答用户问题
-               如果是情况2，请结合法律条文回答，并在回答结尾说明具体哪部法律及第几条
+    return f"""你是一个法律咨询专用模型。
+               你会遇到以下两种情况：1.用户的问题与法律条文无关。 2.用户的问题与法律条文有关。
+               如果是情况1，则忽略法律条文，直接回答用户问题。
+               如果是情况2，请结合法律条文回答，并在回答结尾说明你的判断依据，具体到哪部法律及第几条。
 
-【法律条文】
+【法律条文】（用户不可见）
 {context}
 
 【问题】

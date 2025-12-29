@@ -46,6 +46,7 @@ audio_model = Paraformer(
     device_id=-1     # CPU-only
 )
 
+download_resources(resource_type="vectorstore")
 vectorstore = load_vectorstore(os.path.join(resource_path, "vectorstore"))
 
 def gradio_interface_fn(input_audio, input_text):
@@ -230,7 +231,7 @@ def stop_fn():
 
 
 with gr.Blocks(
-    title="Qwen 模型客户端（Transformers 版）",
+    title="ChatLaw 客户端（Transformers 版）",
     css="""
         #model_output {
           border: 2px solid #ccc;
@@ -244,7 +245,7 @@ with gr.Blocks(
     """
 ) as demo:
 
-    gr.Markdown("## 🔗 Qwen 模型客户端（Transformers 版）")
+    gr.Markdown("## 🔗 ChatLaw 客户端（Transformers 版）")
 
     audio_inp = gr.Audio(
         sources=["microphone"],
