@@ -47,6 +47,7 @@ audio_model = Paraformer(
     device_id=-1     # CPU-only
 )
 
+download_resources(resource_type="vectorstore")
 vectorstore = load_vectorstore(os.path.join(resource_path, "vectorstore"))
 
 def gradio_interface_fn(input_audio, input_text):
@@ -219,38 +220,144 @@ def stop_fn():
 
 
 with gr.Blocks(
-    title="ChatLaw 客户端（UI + 流式输出）",
+    title="ChatLaw · 智能法律咨询",
     css="""
-        #model_output {
-          border: 2px solid #ccc;
-          border-radius: 10px;
-          background-color: #fff;
-          padding: 15px;
-          box-shadow: 0 3px 10px rgba(0,0,0,0.1);
-          height: 500px;
-          overflow-y: auto;
-        }
+    body {
+        background-color: #f5f7fa;
+    }
+
+    .header {
+        text-align: center;
+        padding: 20px 0 10px 0;
+    }
+
+    .header h1 {
+        color: #1f2937;
+        font-size: 32px;
+        margin-bottom: 5px;
+    }
+
+    .header p {
+        color: #6b7280;
+        font-size: 14px;
+    }
+
+    .disclaimer {
+        background-color: #fff7ed;
+        border: 1px solid #fed7aa;
+        border-radius: 8px;
+        padding: 12px;
+        font-size: 13px;
+        color: #9a3412;
+        margin-bottom: 15px;
+    }
+
+    .card {
+        background-color: white;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+
+    #model_output {
+        border: none;
+        border-radius: 10px;
+        background-color: #ffffff;
+        padding: 18px;
+        height: 520px;
+        overflow-y: auto;
+        font-size: 15px;
+        line-height: 1.7;
+    }
+
+    .status-box textarea {
+        background-color: #f3f4f6 !important;
+        font-size: 13px;
+    }
+
+    .btn-primary {
+        background-color: #1e40af !important;
+        color: white !important;
+    }
+
+    .btn-stop {
+        background-color: #991b1b !important;
+        color: white !important;
+    }
     """
 ) as demo:
 
-    gr.Markdown("## 🔗 ChatLaw 客户端（MindNLP版）")
-    audio_inp = gr.Audio(
-        sources=["microphone"],
-        type="numpy",
-        label="中文语音输入（请说完整一句话）"
+    # ===== Header =====
+    gr.HTML(
+        """
+        <div class="header">
+            <h1>⚖️ ChatLaw</h1>
+            <p>基于大模型的智能法律咨询助手</p>
+        </div>
+        """
     )
 
-    text_inp = gr.Textbox(label="输入文本", lines=2, placeholder="请输入内容...")
-    status_box = gr.Textbox(label="连接与状态信息", interactive=False)
+    # ===== Disclaimer =====
+    gr.HTML(
+        """
+        <div class="disclaimer">
+        ⚠️ <b>重要提示：</b>
+        本系统提供的内容仅作为一般法律信息参考，不构成正式法律意见或律师建议。
+        </div>
+        """
+    )
 
+    # ===== Main Layout =====
     with gr.Row():
-        btn_send = gr.Button("🚀 发送到服务器")
-        btn_stop = gr.Button("🛑 停止推理")
 
-    output_box = gr.HTML(label="模型输出", elem_id="model_output")
+        # ===== Left: Input Area =====
+        with gr.Column(scale=4):
+            with gr.Group():
+                gr.Markdown("### 📝 咨询输入", elem_classes="card")
 
-    btn_send.click(gradio_interface_fn, inputs=[audio_inp, text_inp], outputs=[status_box, output_box])
-    btn_stop.click(stop_fn, inputs=None, outputs=[status_box, output_box])
+                audio_inp = gr.Audio(
+                    sources=["microphone"],
+                    type="numpy",
+                    label="🎙️ 中文语音输入（说完整一句）"
+                )
+
+                text_inp = gr.Textbox(
+                    label="✍️ 文本输入",
+                    lines=3,
+                    placeholder="例如：小明因过失导致宿舍楼失火因承担什么法律责任？"
+                )
+
+                status_box = gr.Textbox(
+                    label="📡 连接 / 推理状态",
+                    interactive=False,
+                    elem_classes="status-box"
+                )
+
+                with gr.Row():
+                    btn_send = gr.Button("🚀 提交咨询", elem_classes="btn-primary")
+                    btn_stop = gr.Button("🛑 停止推理", elem_classes="btn-stop")
+
+        # ===== Right: Output Area =====
+        with gr.Column(scale=6):
+            gr.Markdown("### 📚 分析与解答", elem_classes="card")
+
+            output_box = gr.HTML(
+                label="",
+                elem_id="model_output"
+            )
+
+    # ===== Events =====
+    btn_send.click(
+        gradio_interface_fn,
+        inputs=[audio_inp, text_inp],
+        outputs=[status_box, output_box]
+    )
+
+    btn_stop.click(
+        lambda: stop_event.set(),
+        None,
+        None
+    )
 
 
 if __name__ == "__main__":

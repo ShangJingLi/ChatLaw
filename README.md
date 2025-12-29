@@ -137,13 +137,13 @@ ChatLaw
 </p>
 
 ### 3.主要开发工具
-| 行项 / 技术方向     | 昇腾技术路线                     | Pytorch 技术路线              |
-|----------------------|----------------------------------|-------------------------------|
-| **深度学习框架**     | MindSpore                        | PyTorch                       |
-| **大模型套件**       | MindNLP                          | Transformers                  |
-| **语音输入模块**     | Vosk API（Python Bindings）      | Vosk API（Python Bindings）   |
-| **RAG 模块构建**     | LangChain                        | LangChain                     |
-| **客户端 UI 构建**   | Gradio                           | Gradio                        |
+| 行项 / 技术方向     | 昇腾技术路线         | Pytorch 技术路线   |
+|----------------------|----------------|----------------|
+| **深度学习框架**     | MindSpore      | PyTorch        |
+| **大模型套件**       | MindNLP        | Transformers   |
+| **语音输入模块**     | Paraformer API | Paraformer API |
+| **RAG 模块构建**     | LangChain      | LangChain      |
+| **客户端 UI 构建**   | Gradio         | Gradio         |
 
 ---
 
@@ -315,16 +315,16 @@ chatlaw server pt  # 服务端使用Pytorch + Transformers实现模型推理
 
 ### 4.使用演示
 
-UI中输入文本（目前尚未嵌入语音模块），按下**🚀发送到服务器**，若状态栏无异常，输出区域有文本流式输入，则运行成功：
+UI中可选择输入文本和语音(不可同时输入)，按下**🚀发送到服务器**，若状态栏无异常，输出区域有文本流式输入，则运行成功。此处演示(已加速)以文本输入为例：
 <p align="center">
   <img src=".gitee/images/show.gif" alt="使用演示">
 </p>
 
-### 5.数据清理
+### 5.数据清除
 命令行输入
 ```
 conda activate myenv  # 激活安装本项目的conda环境，若已激活则忽略本命令
-chawlaw clear  # 清除所有模型文件数据
+chawlaw clear_files  # 清除所有模型文件数据
 ```
 ___
 ## 卸载方法

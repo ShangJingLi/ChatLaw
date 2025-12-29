@@ -25,7 +25,18 @@ audio_model_list = [".mdl",
                     "tokens.json"]
 
 vectorstore_list = ["index.faiss",
-                    "index.pkl"]
+                    "index.pkl",
+                    os.path.join("embedding_model", "1_Pooling", "config.json"),
+                    os.path.join("embedding_model", "config_sentence_transformers.json"),
+                    os.path.join("embedding_model", "gitattributes"),
+                    os.path.join("embedding_model", "modules.json"),
+                    os.path.join("embedding_model", "pytorch_model.bin"),
+                    os.path.join("embedding_model", "README.md"),
+                    os.path.join("embedding_model", "sentence_bert_config.json"),
+                    os.path.join("embedding_model", "special_tokens_map.json"),
+                    os.path.join("embedding_model", "tokenizer.json"),
+                    os.path.join("embedding_model", "tokenizer_config.json"),
+                    os.path.join("embedding_model", "vocab.txt")]
 
 
 def download_resources(resource_type):
