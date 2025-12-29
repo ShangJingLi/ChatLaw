@@ -15,7 +15,10 @@ from chatlaw.client.utils.common_utils import (
     recv_exact,
     render_mathml_from_latex,
     connection_acknowledgement,
-    speech_to_text
+    speech_to_text,
+    load_vectorstore,
+    retrieve_laws,
+    build_prompt
 )
 from chatlaw.dataloader import download_resources
 from launcher import get_resources_path
@@ -43,6 +46,8 @@ audio_model = Paraformer(
     quantize=True,   # 使用 model_quant.onnx
     device_id=-1     # CPU-only
 )
+
+vectorstore = load_vectorstore(os.path.join(resource_path, "vectorstore"))
 
 def gradio_interface_fn(input_audio, input_text):
     """
@@ -103,7 +108,7 @@ def gradio_interface_fn(input_audio, input_text):
         yield "⚠️ 请勿同时输入语音和文本！", ""
         return
 
-    # 只有语音输入：先做 ASR
+    # 只有语音输入：先做 ASR; 只有文本输入：直接使用 input_text
     if has_audio:
         yield "⌛️ 语音处理中...", ""
         input_text = speech_to_text(
@@ -112,7 +117,10 @@ def gradio_interface_fn(input_audio, input_text):
             audio_cache_dir=AUDIO_CACHE_DIR,
             target_sr=TARGET_SR
         )
-    # 只有文本输入：直接使用 input_text
+
+    yield "⌛️ 知识库检索中...", ""
+    docs = retrieve_laws(vectorstore, input_text)
+    input_text = build_prompt(input_text, docs)
 
     global alive
     alive = True

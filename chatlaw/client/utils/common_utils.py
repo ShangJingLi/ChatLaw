@@ -4,6 +4,8 @@ import socket
 import time
 import uuid
 import numpy as np
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
 import soundfile as sf
 import librosa
 from latex2mathml.converter import convert as latex_to_mathml
@@ -216,6 +218,54 @@ def speech_to_text(audio, target_sr, audio_cache_dir, audio_model):
     return text
 
 
+def load_vectorstore(path):
+    embeddings = HuggingFaceEmbeddings(
+        model_name="BAAI/bge-base-zh-v1.5",
+        encode_kwargs={"normalize_embeddings": True}
+    )
+
+    vectorstore = FAISS.load_local(
+        path,
+        embeddings,
+        allow_dangerous_deserialization=True
+    )
+    return vectorstore
+
+
+def retrieve_laws(vectorstore, query, k=10):
+    return vectorstore.similarity_search(query, k=k)
+
+
+def build_prompt(question, docs):
+    blocks = []
+
+    for i, doc in enumerate(docs, 1):
+        blocks.append(
+            f"{i}. 《{doc.metadata['law_name']}》"
+            f"{doc.metadata['article']}：\n"
+            f"{doc.page_content}"
+        )
+
+    context = "\n\n".join(blocks)
+
+    return f"""你会遇到以下两种情况：1.用户的问题与法律问题无关。 2.用户的问题与法律问题有关
+               如果是情况1，则忽略法律条文，直接回答用户问题
+               如果是情况2，请结合法律条文回答，并在回答结尾说明具体哪部法律及第几条
+
+【法律条文】
+{context}
+
+【问题】
+{question}
+
+【回答】
+"""
+
+
 __all__ = ["recv_exact",
            "render_mathml_from_latex",
-           "connection_acknowledgement"]
+           "connection_acknowledgement",
+           "build_prompt",
+           "retrieve_laws",
+           "load_vectorstore",
+           "speech_to_text"]

@@ -8,7 +8,13 @@ from langchain_community.vectorstores import FAISS
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from launcher import get_project_root
 
-
+model_name = "Qwen/Qwen3-4B-Instruct-2507"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    dtype="auto",
+    device_map="auto"
+)
 # ========== 1. 加载向量库 ==========
 def load_vectorstore(path):
     embeddings = HuggingFaceEmbeddings(
@@ -25,7 +31,7 @@ def load_vectorstore(path):
 
 
 # ========== 2. 检索法律条文 ==========
-def retrieve_laws(vectorstore, query, k=5):
+def retrieve_laws(vectorstore, query, k=10):
     return vectorstore.similarity_search(query, k=k)
 
 
@@ -42,7 +48,9 @@ def build_prompt(question, docs):
 
     context = "\n\n".join(blocks)
 
-    return f"""如果问题与下列法律问题无关则直接回答；如果有关请结合法律条文回答，并在回答结尾说明具体哪部法律以及第几条
+    return f"""你会遇到以下两种情况：1.用户的问题与法律问题无关。 2.用户的问题与法律问题有关
+               如果是情况1，则忽略法律条文，直接回答用户问题
+               如果是情况2，请结合法律条文回答，并在回答结尾说明具体哪部法律及第几条
 
 【法律条文】
 {context}
@@ -56,15 +64,6 @@ def build_prompt(question, docs):
 
 # ========== 4. 调用 Qwen ==========
 def qwen_generate(prompt):
-    model_name = "Qwen/Qwen3-4B-Instruct-2507"
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype="auto",
-        device_map="auto"
-    )
-
     messages = [{"role": "user", "content": prompt}]
     text = tokenizer.apply_chat_template(
         messages,
@@ -85,15 +84,29 @@ def qwen_generate(prompt):
 
 # ========== 5. 主流程 ==========
 if __name__ == "__main__":
+    start = time.time()
     vectorstore = load_vectorstore(os.path.join(get_project_root(), "resources", "vectorstore"))
+    end = time.time()
+    print("向量库加载时长:" + str(round(end - start, 2)) + "秒")
 
-    question = "离婚后未成年子女的抚养权如何确定？"
+    question = "你好！"
     start = time.time()
     docs = retrieve_laws(vectorstore, question)
     end = time.time()
     print("检索时长：" + str(round(end - start, 2)) + "秒")
 
     prompt = build_prompt(question, docs)
+    print(prompt)
     answer = qwen_generate(prompt)
+    print(answer)
 
+    question = "小明操纵期货交易需要承担什么法律责任？"
+    start = time.time()
+    docs = retrieve_laws(vectorstore, question)
+    end = time.time()
+    print("检索时长：" + str(round(end - start, 2)) + "秒")
+
+    prompt = build_prompt(question, docs)
+    print(prompt)
+    answer = qwen_generate(prompt)
     print(answer)
