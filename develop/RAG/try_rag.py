@@ -85,7 +85,7 @@ def qwen_generate(prompt):
 # ========== 5. 主流程 ==========
 if __name__ == "__main__":
     start = time.time()
-    vectorstore = load_vectorstore(os.path.join(get_project_root(), "resources", "vectorstore"))
+    vectorstore = load_vectorstore(os.path.join(get_project_root(), "../resources", "vectorstore"))
     end = time.time()
     print("向量库加载时长:" + str(round(end - start, 2)) + "秒")
 
