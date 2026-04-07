@@ -16,7 +16,7 @@ langchain-community
 langchain-huggingface
 faiss-cpu
 sentence-transformers
-tkinter
+pyside6
 
 # develop
 matplotlib

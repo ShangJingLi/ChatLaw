@@ -65,9 +65,32 @@ def resolve_script_path(role, mode):
 
 
 def run_python_script(script_path, extra_args):
-    cmd = [sys.executable, script_path] + extra_args
+    project_root = os.path.dirname(os.path.abspath(__file__))
+
+    env = os.environ.copy()
+
+    # 对 embeddable Python，尽量不要依赖 PYTHONPATH 来救场
+    # 但这里保留，普通 Python 下也有帮助
+    old_pythonpath = env.get("PYTHONPATH", "")
+    if old_pythonpath:
+        env["PYTHONPATH"] = project_root + os.pathsep + old_pythonpath
+    else:
+        env["PYTHONPATH"] = project_root
+
+    # 如果脚本在项目内，优先转成 -m 方式启动
+    rel_path = os.path.relpath(script_path, project_root)
+
+    if rel_path.endswith(".py"):
+        module_name = rel_path[:-3].replace(os.sep, ".")
+        cmd = [sys.executable, "-m", module_name] + extra_args
+    else:
+        cmd = [sys.executable, script_path] + extra_args
+
     print(f"[Execute] {cmd}")
-    subprocess.run(cmd)
+    print(f"[Execute] cwd={project_root}")
+    print(f"[Execute] PYTHONPATH={env['PYTHONPATH']}")
+
+    subprocess.run(cmd, cwd=project_root, env=env)
 
 
 # =============== 主入口 ===============
