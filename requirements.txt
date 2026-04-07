@@ -16,3 +16,10 @@ langchain-community
 langchain-huggingface
 faiss-cpu
 sentence-transformers
+tkinter
+
+# develop
+matplotlib
+pymupdf
+bitsandbytes       # 4bit 量化支持（Windows 需要特殊安装）
+tqdm
