@@ -6,13 +6,18 @@ import gradio as gr
 import markdown
 from transformers import AutoTokenizer
 from funasr_onnx import Paraformer
-from chatlaw.client.utils.common_utils import (recv_exact,
-                                               render_mathml_from_latex,
-                                               connection_acknowledgement,
-                                               speech_to_text,
-                                               load_vectorstore,
-                                               retrieve_laws,
-                                               build_prompt)
+
+from chatlaw.client.utils.common_utils import (
+    recv_exact,
+    render_mathml_from_latex,
+    connection_acknowledgement,
+    speech_to_text,
+    load_vectorstore,
+    load_exact_index,
+    build_law_name_candidates,
+    retrieve_laws,
+    build_prompt
+)
 from chatlaw.configuration import config
 from chatlaw.client.utils.utils_pt import (
     heartbeat_client,
@@ -23,13 +28,17 @@ from launcher import get_resources_path
 
 
 # ========== 全局状态 ==========
-alive = True                 # 数据流是否继续
-stop_event = threading.Event()  # STOP 信号
+alive = True
+stop_event = threading.Event()
+
 
 def alive_flag():
     return alive
 
+
+# ========== 资源加载 ==========
 resource_path = get_resources_path()
+
 download_resources(resource_type="tokenizer")
 tokenizer_path = os.path.join(resource_path, "tokenizer").replace("\\", "/")
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
@@ -37,84 +46,129 @@ tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
 download_resources(resource_type="audio_model")
 AUDIO_MODEL_DIR = os.path.join(resource_path, "audio_model").replace("\\", "/")
 TARGET_SR = 16000
-AUDIO_CACHE_DIR = os.path.join(get_resources_path(), "_asr_cache")  # 语音临时文件目录
+AUDIO_CACHE_DIR = os.path.join(get_resources_path(), "_asr_cache")
 os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
+
 audio_model = Paraformer(
     AUDIO_MODEL_DIR,
     batch_size=1,
-    quantize=True,   # 使用 model_quant.onnx
-    device_id=-1     # CPU-only
+    quantize=True,
+    device_id=-1
 )
 
 download_resources(resource_type="vectorstore")
-vectorstore = load_vectorstore(os.path.join(resource_path, "vectorstore"))
+vectorstore = load_vectorstore(os.path.join(get_resources_path(), "vectorstore"))
+exact_index = load_exact_index()
+law_name_candidates = build_law_name_candidates(exact_index)
 
-def gradio_interface_fn(input_audio, input_text):
+
+def _extract_doc_fields(item):
     """
-    功能：
-        Gradio 的核心回调生成器函数，每次用户点击“发送”按钮都会触发一次新的推理流程。
-        本函数负责：
-        1. 启动心跳线程，确保服务器连接存活；
-        2. 将用户输入封装为模型可处理的 prompt；
-        3. 通过一次短连接检测服务器是否可用；
-        4. 与服务器建立数据连接并进行流式推理接收；
-        5. 在推理过程中持续向前端 UI 发送增量渲染结果；
-        6. 在 STOP 中断、错误、或服务器返回 <END> 时进行收尾处理。
-
-        该函数是一个 Python generator，每一次 `yield` 都会促使 Gradio 立即更新界面，
-        用于实现实时流式输出效果。
-
-    Args:
-        input_audio : 用户录入语音，将作为问询内容或 prompt。
-        input_text (str): 用户输入的自然语言文本，将作为问询内容或 prompt。
-
-    Inputs:
-        - **input_text**: 前端用户输入的文本内容。
-        - **input_audio**: 前端用户输入的语音内容。
-        - 全局依赖：
-            - **alive** (bool): 控制心跳线程继续运行的标志。
-            - **stop_event** (Event): 前端用于停止推理的事件信号。
-            - **tokenizer**: 构造模型输入的 tokenizer。
-            - **heartbeat_client**: 心跳线程函数，用于维护与服务器的存活性检测。
-            - **connection_acknowledgement**: 用于短连接测试服务器是否在线。
-            - **stream_from_server**: 流式推理数据接收器。
-            - **render_mathml_from_latex**: 将 Markdown 中的公式转换为 MathML。
-            - **markdown.markdown**: 渲染 Markdown 文本。
-
-    Outputs:
-        作为一个生成器（generator），本函数多次 yield：
-            (状态文本, HTML渲染内容)
-        示例：
-            - ("🟡 正在建立连接...", "")
-            - ("⌛️ 语音处理中...", "")
-            - ("⌛️ 知识库检索中...", "")
-            - ("🟢 推理中...", "<html>渲染内容</html>")
-            - ("🛑 推理已中断。", "<html>最终渲染</html>")
-            - ("⚠️ 数据接收异常：xxx", "")
-            - ("✅ 推理完成。", "<html>最终渲染</html>")
-
-        这些值将被 Gradio 自动逐段渲染到 UI 中，实现实时输出体验。
-
-    Raises:
-        本函数不向外抛出异常。
-        所有连接异常、推理异常等均以 yield 的形式返回给前端，
-        格式为："⚠️ 数据接收异常：xxx"。
+    统一提取检索结果字段，兼容两种输入：
+    1. FAISS 返回的 LangChain Document
+    2. 精确索引返回的 dict
     """
+    # FAISS Document
+    if hasattr(item, "metadata"):
+        metadata = item.metadata or {}
+        law_name = (
+            metadata.get("law_name_raw")
+            or metadata.get("law_name")
+            or metadata.get("law_name_norm")
+            or "未知法律"
+        )
+        article = metadata.get("article", "")
+        content = metadata.get("content", "") or getattr(item, "page_content", "")
+        return law_name, article, content
+
+    # exact 索引 dict
+    if isinstance(item, dict):
+        law_name = (
+            item.get("law_name_raw")
+            or item.get("law_name")
+            or item.get("law_name_norm")
+            or "未知法律"
+        )
+        article = item.get("article", "")
+        content = item.get("content", "")
+        return law_name, article, content
+
+    # fallback
+    return "未知法律", "", str(item)
+
+
+def format_retrieved_docs_html(docs):
+    """
+    将当前检索到的知识库条文整理成 HTML。
+    兼容：
+    - FAISS Document
+    - exact index dict
+    """
+    if not docs:
+        return "<div>未检索到相关法律条文。</div>"
+
+    blocks = []
+    for i, doc in enumerate(docs, 1):
+        law_name, article, content = _extract_doc_fields(doc)
+
+        blocks.append(
+            f"### {i}. 《{law_name}》{article}\n\n{content}"
+        )
+
+    md_text = "\n\n---\n\n".join(blocks)
+    rendered = markdown.markdown(md_text, extensions=["fenced_code", "tables"])
+    html = render_mathml_from_latex(rendered)
+    return f"<div>{html}</div>"
+
+
+def prepare_request_fn(input_audio, input_text):
+    """
+    第一步：
+    - 输入校验
+    - 语音转文字
+    - 知识库检索
+    - 构造最终 prompt
+    - 返回检索结果，并开放“查看知识库检索”按钮
+
+    注意：
+    这里只更新一次知识库窗口相关状态。
+    后续流式推理不再碰它，避免窗口被刷新关闭。
+    """
+    retrieval_html = ""
+    retrieval_box_update = gr.update(visible=False)
+    btn_update = gr.update(interactive=False)
+    output_update = ""
+    final_prompt = ""
+    retrieval_visible_state = False
+
     # ===== 语音 / 文本 二选一校验 =====
     has_audio = input_audio is not None
     has_text = input_text is not None and input_text.strip() != ""
 
     if not has_audio and not has_text:
-        yield "⚠️ 请输入语音或文本！", ""
-        return
+        return (
+            "⚠️ 请输入语音或文本！",
+            output_update,
+            retrieval_html,
+            retrieval_box_update,
+            btn_update,
+            final_prompt,
+            retrieval_visible_state,
+        )
 
     if has_audio and has_text:
-        yield "⚠️ 请勿同时输入语音和文本！", ""
-        return
+        return (
+            "⚠️ 请勿同时输入语音和文本！",
+            output_update,
+            retrieval_html,
+            retrieval_box_update,
+            btn_update,
+            final_prompt,
+            retrieval_visible_state,
+        )
 
-    # 只有语音输入：先做 ASR; 只有文本输入：直接使用 input_text
+    # ===== 语音输入先转文字 =====
     if has_audio:
-        yield "⌛️ 语音处理中...", ""
         input_text = speech_to_text(
             audio=input_audio,
             audio_model=audio_model,
@@ -122,15 +176,48 @@ def gradio_interface_fn(input_audio, input_text):
             target_sr=TARGET_SR
         )
 
-    yield "⌛️ 知识库检索中...", ""
-    docs = retrieve_laws(vectorstore, input_text)
-    input_text = build_prompt(input_text, docs)
+    # ===== 知识库检索 =====
+    docs = retrieve_laws(
+        vectorstore=vectorstore,
+        query=input_text,
+        exact_index=exact_index,
+        law_name_candidates=law_name_candidates
+    )
+
+    retrieval_html = format_retrieved_docs_html(docs)
+    final_prompt = build_prompt(input_text, docs)
+
+    # 检索完成后，按钮开放，但窗口默认仍隐藏
+    return (
+        "✅ 知识库检索完成。",
+        output_update,
+        retrieval_html,
+        gr.update(visible=False),
+        gr.update(interactive=True),
+        final_prompt,
+        False,
+    )
+
+
+def stream_inference_fn(final_prompt):
+    """
+    第二步：
+    只负责流式推理。
+    这里只更新：
+    - status_box
+    - output_box
+
+    不再更新 retrieval_box / btn_view_kb / retrieval_visible_state，
+    因此不会把已经点开的知识库窗口冲掉。
+    """
+    if not final_prompt:
+        yield "⚠️ 没有可用的输入内容。", ""
+        return
 
     global alive
     alive = True
     stop_event.clear()
 
-    # 启动心跳
     threading.Thread(
         target=heartbeat_client,
         args=(
@@ -150,7 +237,7 @@ def gradio_interface_fn(input_audio, input_text):
         yield "🟡 正在建立连接...", ""
 
         # ---- 构造模型输入 ----
-        messages = [{"role": "user", "content": input_text}]
+        messages = [{"role": "user", "content": final_prompt}]
         templated = tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
@@ -173,7 +260,6 @@ def gradio_interface_fn(input_audio, input_text):
 
         yield "✅ 已连接服务器，开始推理...", ""
 
-        # ========== 流式接收 ==========
         partial_md = ""
 
         for chunk in stream_from_server(
@@ -186,12 +272,10 @@ def gradio_interface_fn(input_audio, input_text):
             stop_event,
             model_inputs
         ):
-            # ---- 错误情况 ----
             if isinstance(chunk, str) and chunk.startswith("[ClientError]"):
                 yield f"⚠️ 数据接收异常：{chunk}", ""
                 break
 
-            # ---- 服务端结束 ----
             if chunk == "<END>":
                 rendered = markdown.markdown(
                     partial_md, extensions=["fenced_code", "tables"]
@@ -204,7 +288,6 @@ def gradio_interface_fn(input_audio, input_text):
                     yield "✅ 推理完成。", f"<div>{html}</div>"
                 break
 
-            # ---- 增量生成 ----
             partial_md += chunk
             rendered = markdown.markdown(
                 partial_md, extensions=["fenced_code", "tables"]
@@ -222,12 +305,15 @@ def gradio_interface_fn(input_audio, input_text):
 
     finally:
         alive = False
-        time.sleep(0.5)  # 给心跳线程一点时间退出
+        time.sleep(0.5)
 
 
-def stop_fn():
-    stop_event.set()
-    return "🛑 已发送停止信号到服务器", ""
+def toggle_retrieval_panel(visible_now):
+    """
+    点击展开 / 点击隐藏知识库检索结果。
+    """
+    new_visible = not bool(visible_now)
+    return gr.update(visible=new_visible), new_visible
 
 
 with gr.Blocks(
@@ -295,10 +381,32 @@ with gr.Blocks(
         background-color: #991b1b !important;
         color: white !important;
     }
+
+    .btn-kb {
+        background-color: #065f46 !important;
+        color: white !important;
+    }
+
+    #retrieval_panel {
+        margin-top: 12px;
+        background-color: #f8fafc;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 14px;
+        max-height: 260px;
+        overflow-y: auto;
+        font-size: 14px;
+        line-height: 1.7;
+    }
+
+    .kb-tip {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #64748b;
+    }
     """
 ) as demo:
 
-    # ===== Header =====
     gr.HTML(
         """
         <div class="header">
@@ -308,7 +416,6 @@ with gr.Blocks(
         """
     )
 
-    # ===== Disclaimer =====
     gr.HTML(
         """
         <div class="disclaimer">
@@ -318,10 +425,7 @@ with gr.Blocks(
         """
     )
 
-    # ===== Main Layout =====
     with gr.Row():
-
-        # ===== Left: Input Area =====
         with gr.Column(scale=4):
             with gr.Group():
                 gr.Markdown("### 📝 咨询输入", elem_classes="card")
@@ -335,7 +439,7 @@ with gr.Blocks(
                 text_inp = gr.Textbox(
                     label="✍️ 文本输入",
                     lines=3,
-                    placeholder="例如：小明因过失导致宿舍楼失火因承担什么法律责任？"
+                    placeholder="例如：小明因过失导致宿舍楼失火应承担什么法律责任？"
                 )
 
                 status_box = gr.Textbox(
@@ -348,7 +452,29 @@ with gr.Blocks(
                     btn_send = gr.Button("🚀 提交咨询", elem_classes="btn-primary")
                     btn_stop = gr.Button("🛑 停止推理", elem_classes="btn-stop")
 
-        # ===== Right: Output Area =====
+                btn_view_kb = gr.Button(
+                    "👁️ 查看知识库检索",
+                    interactive=False,
+                    elem_classes="btn-kb"
+                )
+
+                gr.HTML(
+                    """
+                    <div class="kb-tip">
+                    点击按钮展开或隐藏本轮知识库检索到的法律条文。
+                    </div>
+                    """
+                )
+
+                retrieval_box = gr.HTML(
+                    value="",
+                    elem_id="retrieval_panel",
+                    visible=False
+                )
+
+                retrieval_visible_state = gr.State(False)
+                final_prompt_state = gr.State("")
+
         with gr.Column(scale=6):
             gr.Markdown("### 📚 分析与解答", elem_classes="card")
 
@@ -357,10 +483,25 @@ with gr.Blocks(
                 elem_id="model_output"
             )
 
-    # ===== Events =====
-    btn_send.click(
-        gradio_interface_fn,
+    # 第一段：准备请求（检索、构造 prompt、开放按钮）
+    send_evt = btn_send.click(
+        prepare_request_fn,
         inputs=[audio_inp, text_inp],
+        outputs=[
+            status_box,              # 状态
+            output_box,              # 重置输出
+            retrieval_box,           # 写入检索结果 HTML
+            retrieval_box,           # 隐藏检索面板
+            btn_view_kb,             # 开放 / 禁用按钮
+            final_prompt_state,      # 保存最终 prompt
+            retrieval_visible_state  # 重置面板展开状态
+        ]
+    )
+
+    # 第二段：流式推理（只更新状态和输出，不碰知识库窗口）
+    send_evt.then(
+        stream_inference_fn,
+        inputs=[final_prompt_state],
         outputs=[status_box, output_box]
     )
 
@@ -368,6 +509,12 @@ with gr.Blocks(
         lambda: stop_event.set(),
         None,
         None
+    )
+
+    btn_view_kb.click(
+        toggle_retrieval_panel,
+        inputs=[retrieval_visible_state],
+        outputs=[retrieval_box, retrieval_visible_state]
     )
 
 
