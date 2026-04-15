@@ -24,8 +24,10 @@ audio_model_list = [".mdl",
                     "model_quant.onnx",
                     "tokens.json"]
 
-vectorstore_list = ["index.faiss",
-                    "index.pkl",
+vectorstore_list = ["law_article_index.json",
+                    "law_name_index.json",
+                    os.path.join("law_faiss", "index.faiss"),
+                    os.path.join("law_faiss", "index.pkl"),
                     os.path.join("embedding_model", "1_Pooling", "config.json"),
                     os.path.join("embedding_model", "config_sentence_transformers.json"),
                     os.path.join("embedding_model", "gitattributes"),

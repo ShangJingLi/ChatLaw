@@ -57,7 +57,7 @@ audio_model = Paraformer(
 )
 
 download_resources(resource_type="vectorstore")
-vectorstore = load_vectorstore(os.path.join(get_resources_path(), "vectorstore"))
+vectorstore = load_vectorstore(os.path.join(get_resources_path(), "vectorstore", "law_faiss"))
 exact_index = load_exact_index()
 law_name_candidates = build_law_name_candidates(exact_index)
 
