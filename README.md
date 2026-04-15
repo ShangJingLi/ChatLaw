@@ -72,64 +72,71 @@ ___
 ## 软件架构
 ### 1.项目目录（随项目开发更新）
 ```
-ChatLaw
-    ├── chatlaw
-    │   ├── clear_files.py
-    │   ├── client
-    │   │   ├── client_ms.py
-    │   │   ├── client_pt.py
-    │   │   ├── __init__.py
-    │   │   └── utils
-    │   │       ├── common_utils.py
-    │   │       ├── __init__.py
-    │   │       ├── utils_ms.py
-    │   │       └── utils_pt.py
-    │   ├── configuration.py
-    │   ├── config.yaml
-    │   ├── dataloader
-    │   │   ├── downloads.py
-    │   │   └── __init__.py
-    │   ├── __init__.py
-    │   └── server
-    │       ├── __init__.py
-    │       ├── server_ms.py
-    │       └── server_pt.py
-    ├── develop
-    │   ├── RAG
-    │   │   ├── batch_extract_all_laws.py
-    │   │   ├── extract_law_pure_regex.py
-    │   │   ├── extract_regex_llm_repair.py
-    │   │   ├── extract_sliding_window.py
-    │   │   ├── law_pdf_to_json.py
-    │   │   ├── requirements.txt
-    │   │   └── verify_extraction.py
-    │   └── README.md
-    ├── launcher.py
-    ├── LICENSE
-    ├── MANIFEST.in
-    ├── README.md
-    ├── requirements.txt
-    ├── scripts
-    │   ├── dhcp_linux_client.sh
-    │   ├── dhcp_linux_server.sh
-    │   ├── dhcp_mac_client.sh
-    │   ├── orangepi
-    │   │   ├── 310b
-    │   │   │   ├── aclinit.json
-    │   │   │   ├── CANN_installer.sh
-    │   │   │   ├── mindspore_installer.sh
-    │   │   │   └── preparation.sh
-    │   │   ├── 310p
-    │   │   │   ├── CANN_installer.sh
-    │   │   │   ├── mindspore_installer.sh
-    │   │   │   └── preparation.sh
-    │   │   └── README.md
-    │   ├── push_to_all_repositories
-    │   ├── pylint_check.sh
-    │   ├── static_ip_linux_client.sh
-    │   ├── static_ip_mac_client.sh
-    │   └── static_ip_server.sh
-    └── setup.py
+ChatLaw/
+  ├── setup.py
+  ├── scripts
+  │   ├── static_ip_server.sh
+  │   ├── static_ip_mac_client.sh
+  │   ├── static_ip_linux_client.sh
+  │   ├── pylint_check.sh
+  │   ├── push_to_all_repositories
+  │   ├── orangepi
+  │   │   ├── README.md
+  │   │   ├── 310p
+  │   │   │   ├── preparation.sh
+  │   │   │   ├── mindspore_installer.sh
+  │   │   │   └── CANN_installer.sh
+  │   │   └── 310b
+  │   │       ├── preparation.sh
+  │   │       ├── mindspore_installer.sh
+  │   │       ├── CANN_installer.sh
+  │   │       └── aclinit.json
+  │   ├── dhcp_mac_client.sh
+  │   ├── dhcp_linux_server.sh
+  │   └── dhcp_linux_client.sh
+  ├── requirements.txt
+  ├── README.md
+  ├── MANIFEST.in
+  ├── LICENSE
+  ├── launcher.py
+  ├── launcher_gui.py
+  ├── develop
+  │   ├── RAG
+  │   │   ├── verify_extraction.py
+  │   │   ├── utils.py
+  │   │   ├── try_rag.py
+  │   │   ├── law_pdf_to_json.py
+  │   │   ├── extract_sliding_window.py
+  │   │   ├── extract_regex_llm_repair.py
+  │   │   ├── extract_law_pure_regex.py
+  │   │   ├── build_vectorstore.py
+  │   │   └── batch_extract_all_laws.py
+  │   └── finetune
+  │       ├── train_qwen3_finetune.py
+  │       └── split_dataset.py
+  ├── chatlaw
+  │   ├── server
+  │   │   ├── server_pt.py
+  │   │   ├── server_ms.py
+  │   │   └── __init__.py
+  │   ├── __init__.py
+  │   ├── dataloader
+  │   │   ├── __init__.py
+  │   │   └── downloads.py
+  │   ├── config.yaml
+  │   ├── configuration.py
+  │   ├── client
+  │   │   ├── utils
+  │   │   │   ├── utils_pt.py
+  │   │   │   ├── utils_ms.py
+  │   │   │   ├── __init__.py
+  │   │   │   └── common_utils.py
+  │   │   ├── __init__.py
+  │   │   ├── client_pt.py
+  │   │   └── client_ms.py
+  │   └── clear_files.py
+  └── bootstrap
+      └── get-pip.py
 ```
 ### 2.项目结构图
 <p align="center">
