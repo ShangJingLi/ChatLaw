@@ -18,26 +18,20 @@ def get_development_path():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "develop")
 
 
-def resolve_script_path(role, mode):
+def resolve_script_path(role):
     """
     功能：
-        根据执行角色（client/server）与模式（mode）动态生成并返回对应 Python
-        启动脚本的绝对路径。该函数用于启动器（launcher）中，用于精确定位客户端
-        或服务器端不同模式的运行脚本位置，例如：
-            - client/client_normal.py
-            - server/server_local.py
-        等等。
+        根据执行角色（client/server）返回对应 Python 启动脚本的绝对路径。
+        该函数用于启动器（launcher）中，用于精确定位客户端或服务器端的运行脚本位置。
 
         函数会检查生成的路径是否存在，若不存在则抛出异常，确保启动器不会执行
         无效路径。
 
     Args:
         role (str): 执行角色，必须是 `"client"` 或 `"server"`。
-        mode (str): 运行模式，用于匹配对应脚本名称，例如 "normal"、"local" 等。
 
     Inputs:
         - **role**: 角色类别，用于确定脚本目录 client/ 或 server/。
-        - **mode**: 模式名称，用于拼接脚本文件名。
         - 函数依赖全局工具：
             - **get_project_root()**: 返回项目根目录路径。
             - **os.path**: 用于路径拼接与存在性检查。
@@ -52,9 +46,9 @@ def resolve_script_path(role, mode):
     root = get_project_root()
 
     if role == "client":
-        script = os.path.join(root, "client", f"client_{mode}.py")
+        script = os.path.join(root, "client", "client_pt.py")
     elif role == "server":
-        script = os.path.join(root, "server", f"server_{mode}.py")
+        script = os.path.join(root, "server", "server_pt.py")
     else:
         raise ValueError("未知角色 client/server")
 
@@ -101,22 +95,22 @@ def main():
         ChatLaw 命令行入口函数（CLI）。
         用于解析用户在命令行输入的指令，并根据不同子命令执行对应的功能模块。
         整体功能包括：
-            - 启动 ChatLaw 客户端程序（client ms/pt）
-            - 启动 ChatLaw 服务端程序（server ms/pt）
-            - 清理资源目录（clear）
+            - 启动 ChatLaw 客户端程序（client）
+            - 启动 ChatLaw 服务端程序（server）
+            - 清理资源目录（clear_files）
 
         该函数负责构建 argparse 命令结构、解析用户输入，并调用相应的脚本启动逻辑。
 
     Inputs:
         本函数无显式输入参数，但依赖直接执行命令行时传入的参数，如：
-            chatlaw client ms  --SERVER_IP "127.0.0.1"
-            chatlaw server pt
-            chatlaw clear
+            chatlaw client --SERVER_IP "127.0.0.1"
+            chatlaw server
+            chatlaw clear_files
 
         内部依赖以下外部函数/模块：
-            - **resolve_script_path(role, mode)**：根据角色与模式解析脚本路径。
+            - **resolve_script_path(role)**：根据角色解析脚本路径。
             - **run_python_script(path, args)**：用于启动对应的 Python 子进程。
-            - **clear_resources()**：清理资源目录。
+            - **clear_files.py**：清理资源目录。
             - **argparse**：解析命令行参数。
             - **get_project_root() / config**：用于路径和环境配置。
 
@@ -134,14 +128,13 @@ def main():
             "ChatLaw 命令行工具\n"
             "\n"
             "可用指令包括：\n"
-            "  chatlaw client <ms|pt> [其他参数]    启动客户端模式\n"
-            "  chatlaw server <ms|pt> [其他参数]    启动服务端模式\n"
-            "  chatlaw clear                 清理 resources 文件夹\n"
+            "  chatlaw client [其他参数]    启动客户端模式\n"
+            "  chatlaw server [其他参数]    启动服务端模式\n"
+            "  chatlaw clear_files          清理 resources 文件夹\n"
             "\n"
             "说明：\n"
-            "  - ms  表示使用MindNLP版本\n"
-            "  - pt  表示使用Transformers版本\n"
-            "  - clear 会在删除前执行交互式确认\n"
+            "  - client/server 后的参数会继续传递给对应脚本\n"
+            "  - clear_files 会在删除前执行交互式确认\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -153,26 +146,16 @@ def main():
         description=(
             "客户端模式：\n"
             "  用于启动 ChatLaw 客户端程序。\n"
-            "  支持两种模式：ms（MindNLP版本）与 pt（Transformers版本）。\n"
         )
     )
-    client_parser.add_argument(
-        "mode", choices=["ms", "pt"], help="启动模式：ms=MindNLP版本, pt=Transformers版本"
-    )
-    client_parser.add_argument("extra", nargs=argparse.REMAINDER, help="传递给客户端脚本的额外参数")
 
     server_parser = subparsers.add_parser(
         "server",
         description=(
             "服务端模式：\n"
             "  用于启动 ChatLaw 服务端进程。\n"
-            "  同样支持 ms（MindNLP版本）与 pt（Transformers版本）两种框架实现方式。\n"
         )
     )
-    server_parser.add_argument(
-        "mode", choices=["ms", "pt"], help="启动模式：ms=MindNLP版本, pt=Transformers版本"
-    )
-    server_parser.add_argument("extra", nargs=argparse.REMAINDER, help="传递给服务端脚本的额外参数")
 
     subparsers.add_parser(
         "clear_files",
@@ -182,13 +165,13 @@ def main():
         )
     )
 
-    args = parser.parse_args()
+    args, extra_args = parser.parse_known_args()
 
     if args.command == "client":
-        run_python_script(resolve_script_path("client", args.mode), args.extra)
+        run_python_script(resolve_script_path("client"), extra_args)
     elif args.command == "server":
-        run_python_script(resolve_script_path("server", args.mode), args.extra)
-    elif args.command == "clear":
+        run_python_script(resolve_script_path("server"), extra_args)
+    elif args.command == "clear_files":
         run_python_script(os.path.join(get_project_root(), "clear_files.py"), [])
 
 
