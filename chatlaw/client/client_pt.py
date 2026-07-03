@@ -238,10 +238,10 @@ def stream_inference_fn(final_prompt):
 
         # ---- 构造模型输入 ----
         messages = [{"role": "user", "content": final_prompt}]
-        templated = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+        prompt_token_ids = tokenizer.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=True
         )
-        model_inputs = tokenizer([templated], return_tensors="pt")
+        model_inputs = {"prompt_token_ids": prompt_token_ids}
 
         # ---- 连接检测（短连接） ----
         detail, status = connection_acknowledgement(

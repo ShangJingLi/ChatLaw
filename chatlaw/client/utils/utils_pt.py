@@ -86,7 +86,7 @@ def stream_from_server(server_ip, data_port,
                        handshake_req, handshake_resp,
                        recv_exact_fn,
                        alive_flag, stop_event,
-                       input_tensor):
+                       model_inputs):
     """
     功能：
         与服务器建立数据连接，发送模型输入，并通过流式协议逐段接收服务器生成的
@@ -108,7 +108,7 @@ def stream_from_server(server_ip, data_port,
         recv_exact_fn (callable): 精确读取指定字节数的函数。
         alive_flag (callable): 返回布尔值，用于决定是否继续读取服务器数据。
         stop_event (Event): 客户端停止推理事件，可由 UI 或心跳机制设置。
-        input_tensor (Any): 由 tokenizer 生成的 numpy 张量或输入字典，将发送给服务器。
+        model_inputs (dict): 由 tokenizer 生成的输入字典，将发送给服务器。
 
     Inputs:
         - **socket连接参数**：server_ip、data_port。
@@ -116,7 +116,7 @@ def stream_from_server(server_ip, data_port,
         - **recv_exact_fn**：签名为 `(conn, n, timeout=None)`。
         - **alive_flag()**：控制流式会话继续执行或终止。
         - **stop_event**：控制 UI 停止渲染但保持读取。
-        - **input_tensor**：经过 pickle 序列化后发送给服务器的输入数据。
+        - **model_inputs**：经过 pickle 序列化后发送给服务器的输入数据。
 
     Outputs:
         本函数为生成器，逐段输出：
@@ -148,7 +148,7 @@ def stream_from_server(server_ip, data_port,
             raise ConnectionError("data handshake failed")
 
         # --- send input ---
-        body = pickle.dumps(input_tensor)
+        body = pickle.dumps(model_inputs)
         s.send(len(body).to_bytes(8, "big"))
         s.sendall(body)
 

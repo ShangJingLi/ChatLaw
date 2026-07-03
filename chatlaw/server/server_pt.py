@@ -4,8 +4,13 @@ import threading
 import time
 import pickle
 import traceback
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer, StoppingCriteria, StoppingCriteriaList
+import asyncio
+import queue
+import uuid
+from vllm import SamplingParams
+from vllm.engine.arg_utils import AsyncEngineArgs
+from vllm.sampling_params import RequestOutputKind
+from vllm.v1.engine.async_llm import AsyncLLM
 from chatlaw.dataloader import download_resources
 from chatlaw.configuration import config
 from launcher import get_resources_path
@@ -18,77 +23,134 @@ stop_flag = threading.Event()  # 全局停止标志
 last_heartbeat_time = time.time()
 alive = True
 
-class StopFlagCriteria(StoppingCriteria):
-    def __init__(self, flag):
-        self.flag = flag
-    def __call__(self, input_ids, scores, **kwargs):
-        # 返回 True 表示应当停止
-        return self.flag.is_set()
-
-
-print("[Backend] Checking available backend hardware...")
-
-device = None
-device_map = "auto"
-use_npu = False
-
-# 检查是否有NPU环境
-if hasattr(torch, "npu"):
-    try:
-        if torch.npu.is_available():
-            use_npu = True
-            print("[Backend] Ascend NPU available.")
-    except Exception:
-        pass
-
-if use_npu:
-    try:
-        import torch_npu  # pylint: disable=unused-import
-        device = "npu"
-        device_map = {"": torch.npu.current_device()}
-        print("[Backend] Using Ascend NPU backend.")
-    except ImportError:
-        raise RuntimeError(
-            "Ascend NPU detected but torch_npu package is missing."
-        )
-# 使用GPU
-elif torch.cuda.is_available():
-    device = "cuda"
-    device_map = "auto"
-    print("[Backend] Using NVIDIA GPU.")
-# 若不含NPU和GPU环境，抛出错误
-else:
-    raise RuntimeError("No compatible backend (Ascend/GPU) Found")
-
 
 # 加载模型
-print("[Model] Loading Qwen model...")
+print("[Model] Loading Qwen model with vLLM...")
 resource_path = get_resources_path()
 download_resources(resource_type="tokenizer")
 download_resources(resource_type="llm")
 
 tokenizer_path = os.path.join(resource_path, "tokenizer").replace("\\", "/")
-tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
-
 model_path = os.path.join(resource_path, "llm").replace("\\", "/")
-if device_map == "npu":
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        local_files_only=True,
-        dtype="auto",
-        device_map=device_map
-    )
-else:
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        local_files_only=True,
-        device_map="auto",  # ★ 保留 auto
-        dtype="auto",
-        attn_implementation="sdpa",
-    )
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.set_float32_matmul_precision("high")
-print("[Model] Qwen loaded successfully.")
+
+
+class VLLMStreamEngine:
+    """
+    在一个后台 asyncio loop 中持有单例 vLLM AsyncLLM。
+    socket 处理线程通过同步生成器读取 chunk，实际请求会进入同一个 vLLM 调度器。
+    """
+
+    _END = object()
+
+    def __init__(self, model_dir, tokenizer_dir):
+        self.model_dir = model_dir
+        self.tokenizer_dir = tokenizer_dir
+        self.loop = asyncio.new_event_loop()
+        self.engine = None
+        self.init_error = None
+        self.ready = threading.Event()
+        self.thread = threading.Thread(target=self._run_loop, daemon=True)
+        self.thread.start()
+        self.ready.wait()
+        if self.init_error is not None:
+            raise self.init_error
+
+    def _run_loop(self):
+        asyncio.set_event_loop(self.loop)
+        try:
+            self.engine = self._create_engine()
+            self.ready.set()
+            self.loop.run_forever()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self.init_error = exc
+            self.ready.set()
+
+    def _create_engine(self):
+        engine_args = AsyncEngineArgs(
+            model=self.model_dir,
+            tokenizer=self.tokenizer_dir,
+            dtype="auto",
+            disable_log_stats=True,
+            enable_log_requests=False,
+        )
+        return AsyncLLM.from_engine_args(engine_args)
+
+    async def _produce(self, request_id, prompt_token_ids, output_queue):
+        sampling_params = SamplingParams(
+            max_tokens=4096,
+            temperature=0.7,
+            output_kind=RequestOutputKind.DELTA,
+            skip_special_tokens=True,
+        )
+        prompt = {"prompt_token_ids": prompt_token_ids}
+
+        try:
+            async for output in self.engine.generate(
+                prompt=prompt,
+                sampling_params=sampling_params,
+                request_id=request_id,
+            ):
+                for completion in output.outputs:
+                    if completion.text:
+                        output_queue.put(completion.text)
+                if output.finished:
+                    break
+        except BaseException as exc:  # pylint: disable=broad-exception-caught
+            output_queue.put(exc)
+        finally:
+            output_queue.put(self._END)
+
+    def stream(self, prompt_token_ids, stop_event):
+        request_id = f"chatlaw-{uuid.uuid4().hex}"
+        output_queue = queue.Queue()
+        future = asyncio.run_coroutine_threadsafe(
+            self._produce(request_id, prompt_token_ids, output_queue),
+            self.loop,
+        )
+        abort_future = None
+
+        try:
+            while True:
+                if stop_event.is_set() and abort_future is None:
+                    abort_future = asyncio.run_coroutine_threadsafe(
+                        self.engine.abort(request_id),
+                        self.loop,
+                    )
+
+                try:
+                    item = output_queue.get(timeout=0.2)
+                except queue.Empty:
+                    if future.done() and future.exception() is not None:
+                        raise future.exception()
+                    continue
+
+                if item is self._END:
+                    break
+                if isinstance(item, BaseException):
+                    raise item
+                if not stop_event.is_set() and item.strip():
+                    yield item
+        finally:
+            if stop_event.is_set() and abort_future is None and not future.done():
+                abort_future = asyncio.run_coroutine_threadsafe(
+                    self.engine.abort(request_id),
+                    self.loop,
+                )
+            if abort_future is not None:
+                try:
+                    abort_future.result(timeout=2)
+                except Exception:
+                    pass
+            stop_event.clear()
+
+    def shutdown(self):
+        if self.engine is not None:
+            self.engine.shutdown()
+        self.loop.call_soon_threadsafe(self.loop.stop)
+
+
+vllm_engine = VLLMStreamEngine(model_path, tokenizer_path)
+print("[Model] Qwen loaded successfully with vLLM.")
 
 
 def recv_exact(conn, n, timeout=None):
@@ -317,26 +379,43 @@ def handle_client(conn, addr):
 
 
 # ======== Qwen 流式生成函数 ========
+def _normalize_prompt_token_ids(model_inputs):
+    prompt_token_ids = model_inputs.get("prompt_token_ids")
+
+    # 兼容旧客户端误发的 input_ids，便于平滑切换。
+    if prompt_token_ids is None and "input_ids" in model_inputs:
+        prompt_token_ids = model_inputs["input_ids"]
+
+    if hasattr(prompt_token_ids, "tolist"):
+        prompt_token_ids = prompt_token_ids.tolist()
+
+    if (
+        isinstance(prompt_token_ids, list)
+        and prompt_token_ids
+        and isinstance(prompt_token_ids[0], list)
+    ):
+        prompt_token_ids = prompt_token_ids[0]
+
+    if not isinstance(prompt_token_ids, list):
+        raise ValueError("model_inputs must contain prompt_token_ids as a list")
+
+    return [int(token_id) for token_id in prompt_token_ids]
+
+
 def stream_generate(model_inputs):
     """
     功能：
-        将客户端传入的模型输入张量送入 Qwen 模型进行流式文本生成。
-        本函数使用 `TextIteratorStreamer` 实现“增量文本”输出，即模型每生成一段新的文本
-        即可被即时捕获并通过 `yield` 返回，便于服务器向客户端实时推送推理结果。
-        同时支持外部停止标志 `stop_flag`，可在推理过程中随时终止生成并安全退出。
+        将客户端传入的 prompt token ids 送入 vLLM AsyncLLM 进行流式文本生成。
+        所有请求共享同一个 vLLM engine，便于后续利用 vLLM 调度器做 continuous batching。
 
     Args:
         model_inputs (dict): 由客户端发送的模型输入字典，通常包含：
-            - ``"input_ids"``: 输入 token 序列张量。
-            - ``"attention_mask"``: 注意力掩码张量。
+            - ``"prompt_token_ids"``: 输入 token id 列表。
 
     Inputs:
-        - **model_inputs** (dict): 必须包含两个键：
-            - ``input_ids`` (Tensor): 用于生成文本的输入 token 序列。
-            - ``attention_mask`` (Tensor): 指定哪些位置参与 attention 计算。
+        - **model_inputs** (dict): 必须包含 ``prompt_token_ids``。
         - 函数依赖全局变量与外部对象：
-            - **model**: Qwen 模型实例，需提供 ``generate`` 方法。
-            - **tokenizer**: 对应的分词器，用于 streamer 文本处理。
+            - **vllm_engine**: vLLM AsyncLLM 包装器。
             - **stop_flag** (Event): 外部停止信号，用于提前终止生成。
 
     Outputs:
@@ -347,51 +426,16 @@ def stream_generate(model_inputs):
     Raises:
         本函数内部不主动抛出异常。模型生成中的异常会在上层捕获。
     """
-    input_ids = model_inputs["input_ids"].to(model.device)
-    attention_mask = model_inputs["attention_mask"].to(model.device)
+    prompt_token_ids = _normalize_prompt_token_ids(model_inputs)
 
-    # 创建流式输出器
-    streamer = TextIteratorStreamer(
-        tokenizer,
-        skip_prompt=True,
-        skip_special_tokens=True
-    )
-    generation_kwargs = dict(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        streamer=streamer,
-        max_new_tokens=4096,
-        temperature=0.7,
-        do_sample=True,
-        stopping_criteria=StoppingCriteriaList([StopFlagCriteria(stop_flag)]),  # ★ 加上这一行
-    )
-
-    # 生成线程（异步）
-    def _run_generate():
-        if device == "cuda":
-            with torch.inference_mode(), torch.autocast("cuda"):
-                model.generate(**generation_kwargs)
-        else:
-            with torch.inference_mode():
-                model.generate(**generation_kwargs)
-
-    thread = threading.Thread(target=_run_generate)
-    thread.start()
-    # thread = threading.Thread(target=model.generate, kwargs=generation_kwargs)
-    # thread.start()
-
-
-    # 正确的流式返回：只发送“新增文本”
-    for new_text in streamer:
-        if stop_flag.is_set():  # 用户发了STOP
-            print("[Data] Generation stopped by client request.")
-            break
-        if new_text.strip():
-            yield new_text
-    stop_flag.clear()  # 复位标志
+    for new_text in vllm_engine.stream(prompt_token_ids, stop_flag):
+        yield new_text
 
 # ======== 主入口 ========
 if __name__ == "__main__":
     hb_thread = threading.Thread(target=heartbeat_server, daemon=True)
     hb_thread.start()
-    data_server()
+    try:
+        data_server()
+    finally:
+        vllm_engine.shutdown()
