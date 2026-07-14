@@ -1,30 +1,22 @@
-import os
+"""ChatLaw 客户端（纯前端）。
+
+重构后客户端不再加载任何模型 / 知识库资源，只负责：
+    1. 采集用户的语音或文本输入；
+    2. 把原始输入发送给服务端；
+    3. 显示服务端返回的「知识库检索结果」与「流式推理输出」。
+
+语音转文字、知识库检索、prompt 构造、分词、推理全部在服务端完成。
+"""
 import time
 import threading
 import binascii
+
 import gradio as gr
 import markdown
-from transformers import AutoTokenizer
-from funasr_onnx import Paraformer
 
-from chatlaw.client.utils.common_utils import (
-    recv_exact,
-    render_mathml_from_latex,
-    connection_acknowledgement,
-    speech_to_text,
-    load_vectorstore,
-    load_exact_index,
-    build_law_name_candidates,
-    retrieve_laws,
-    build_prompt
-)
+from chatlaw.client.utils.common_utils import recv_exact, render_mathml_from_latex
+from chatlaw.client.utils.utils_pt import heartbeat_client, stream_consultation
 from chatlaw.configuration import config
-from chatlaw.client.utils.utils_pt import (
-    heartbeat_client,
-    stream_from_server,
-)
-from chatlaw.dataloader import download_resources
-from launcher import get_resources_path
 
 
 # ========== 全局状态 ==========
@@ -36,39 +28,13 @@ def alive_flag():
     return alive
 
 
-# ========== 资源加载 ==========
-resource_path = get_resources_path()
-
-download_resources(resource_type="tokenizer")
-tokenizer_path = os.path.join(resource_path, "tokenizer").replace("\\", "/")
-tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
-
-download_resources(resource_type="audio_model")
-AUDIO_MODEL_DIR = os.path.join(resource_path, "audio_model").replace("\\", "/")
-TARGET_SR = 16000
-AUDIO_CACHE_DIR = os.path.join(get_resources_path(), "_asr_cache")
-os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
-
-audio_model = Paraformer(
-    AUDIO_MODEL_DIR,
-    batch_size=1,
-    quantize=True,
-    device_id=-1
-)
-
-download_resources(resource_type="vectorstore")
-vectorstore = load_vectorstore(os.path.join(get_resources_path(), "vectorstore", "law_faiss"))
-exact_index = load_exact_index()
-law_name_candidates = build_law_name_candidates(exact_index)
-
-
+# ========== 展示辅助（纯前端） ==========
 def _extract_doc_fields(item):
     """
-    统一提取检索结果字段，兼容两种输入：
-    1. FAISS 返回的 LangChain Document
-    2. 精确索引返回的 dict
+    统一提取检索结果字段。服务端已把结果归一化为 dict：
+        {"law_name": ..., "article": ..., "content": ...}
+    这里同时兼容旧的 FAISS Document，保持健壮。
     """
-    # FAISS Document
     if hasattr(item, "metadata"):
         metadata = item.metadata or {}
         law_name = (
@@ -81,7 +47,6 @@ def _extract_doc_fields(item):
         content = metadata.get("content", "") or getattr(item, "page_content", "")
         return law_name, article, content
 
-    # exact 索引 dict
     if isinstance(item, dict):
         law_name = (
             item.get("law_name_raw")
@@ -93,27 +58,18 @@ def _extract_doc_fields(item):
         content = item.get("content", "")
         return law_name, article, content
 
-    # fallback
     return "未知法律", "", str(item)
 
 
 def format_retrieved_docs_html(docs):
-    """
-    将当前检索到的知识库条文整理成 HTML。
-    兼容：
-    - FAISS Document
-    - exact index dict
-    """
+    """把服务端返回的检索结果整理成 HTML。"""
     if not docs:
         return "<div>未检索到相关法律条文。</div>"
 
     blocks = []
     for i, doc in enumerate(docs, 1):
         law_name, article, content = _extract_doc_fields(doc)
-
-        blocks.append(
-            f"### {i}. 《{law_name}》{article}\n\n{content}"
-        )
+        blocks.append(f"### {i}. 《{law_name}》{article}\n\n{content}")
 
     md_text = "\n\n---\n\n".join(blocks)
     rendered = markdown.markdown(md_text, extensions=["fenced_code", "tables"])
@@ -121,103 +77,42 @@ def format_retrieved_docs_html(docs):
     return f"<div>{html}</div>"
 
 
-def prepare_request_fn(input_audio, input_text):
-    """
-    第一步：
-    - 输入校验
-    - 语音转文字
-    - 知识库检索
-    - 构造最终 prompt
-    - 返回检索结果，并开放“查看知识库检索”按钮
+# ========== 业务流程 ==========
+def reset_ui():
+    """点击提交时先清空上一轮的界面状态。"""
+    return (
+        "",                                   # status_box
+        "",                                   # output_box
+        gr.update(value="", visible=False),   # retrieval_box
+        gr.update(interactive=False),         # btn_view_kb
+        False,                                # retrieval_visible_state
+    )
 
-    注意：
-    这里只更新一次知识库窗口相关状态。
-    后续流式推理不再碰它，避免窗口被刷新关闭。
-    """
-    retrieval_html = ""
-    retrieval_box_update = gr.update(visible=False)
-    btn_update = gr.update(interactive=False)
-    output_update = ""
-    final_prompt = ""
-    retrieval_visible_state = False
 
-    # ===== 语音 / 文本 二选一校验 =====
+def consult_fn(input_audio, input_text):
+    """
+    单连接两阶段流程：
+        1. 校验输入（语音 / 文本二选一）；
+        2. 发送请求 -> 接收检索结果 -> 写入知识库面板（默认隐藏，按钮开放）；
+        3. 接收流式推理输出 -> 增量渲染。
+
+    outputs: [status_box, output_box, retrieval_box, btn_view_kb]
+    """
     has_audio = input_audio is not None
     has_text = input_text is not None and input_text.strip() != ""
 
     if not has_audio and not has_text:
-        return (
-            "⚠️ 请输入语音或文本！",
-            output_update,
-            retrieval_html,
-            retrieval_box_update,
-            btn_update,
-            final_prompt,
-            retrieval_visible_state,
-        )
-
+        yield "⚠️ 请输入语音或文本！", gr.update(), gr.update(), gr.update()
+        return
     if has_audio and has_text:
-        return (
-            "⚠️ 请勿同时输入语音和文本！",
-            output_update,
-            retrieval_html,
-            retrieval_box_update,
-            btn_update,
-            final_prompt,
-            retrieval_visible_state,
-        )
-
-    # ===== 语音输入先转文字 =====
-    if has_audio:
-        input_text = speech_to_text(
-            audio=input_audio,
-            audio_model=audio_model,
-            audio_cache_dir=AUDIO_CACHE_DIR,
-            target_sr=TARGET_SR
-        )
-
-    # ===== 知识库检索 =====
-    docs = retrieve_laws(
-        vectorstore=vectorstore,
-        query=input_text,
-        exact_index=exact_index,
-        law_name_candidates=law_name_candidates
-    )
-
-    retrieval_html = format_retrieved_docs_html(docs)
-    final_prompt = build_prompt(input_text, docs)
-
-    # 检索完成后，按钮开放，但窗口默认仍隐藏
-    return (
-        "✅ 知识库检索完成。",
-        output_update,
-        retrieval_html,
-        gr.update(visible=False),
-        gr.update(interactive=True),
-        final_prompt,
-        False,
-    )
-
-
-def stream_inference_fn(final_prompt):
-    """
-    第二步：
-    只负责流式推理。
-    这里只更新：
-    - status_box
-    - output_box
-
-    不再更新 retrieval_box / btn_view_kb / retrieval_visible_state，
-    因此不会把已经点开的知识库窗口冲掉。
-    """
-    if not final_prompt:
-        yield "⚠️ 没有可用的输入内容。", ""
+        yield "⚠️ 请勿同时输入语音和文本！", gr.update(), gr.update(), gr.update()
         return
 
     global alive
     alive = True
     stop_event.clear()
 
+    # 启动心跳线程（控制通道）
     threading.Thread(
         target=heartbeat_client,
         args=(
@@ -229,40 +124,20 @@ def stream_inference_fn(final_prompt):
             stop_event,
             recv_exact,
         ),
-        daemon=True
+        daemon=True,
     ).start()
 
+    # 构造请求：客户端只搬运原始音频 / 文本，不做任何模型处理
+    if has_audio:
+        request = {"kind": "audio", "audio": input_audio}  # (sample_rate, ndarray)
+    else:
+        request = {"kind": "text", "text": input_text.strip()}
+
+    yield "🟡 正在连接服务器...", gr.update(), gr.update(), gr.update()
+
+    partial_md = ""
     try:
-        start_time = time.time()
-        yield "🟡 正在建立连接...", ""
-
-        # ---- 构造模型输入 ----
-        messages = [{"role": "user", "content": final_prompt}]
-        prompt_token_ids = tokenizer.apply_chat_template(
-            messages, tokenize=True, add_generation_prompt=True
-        )
-        model_inputs = {"prompt_token_ids": prompt_token_ids}
-
-        # ---- 连接检测（短连接） ----
-        detail, status = connection_acknowledgement(
-            config.SERVER_IP,
-            config.DATA_PORT,
-            binascii.unhexlify(config.DATA_HANDSHAKE_REQ),
-            binascii.unhexlify(config.DATA_HANDSHAKE_RESP),
-            recv_exact,
-            start_time
-        )
-        yield detail, ""
-
-        if not status:
-            alive = False
-            return
-
-        yield "✅ 已连接服务器，开始推理...", ""
-
-        partial_md = ""
-
-        for chunk in stream_from_server(
+        for evt in stream_consultation(
             config.SERVER_IP,
             config.DATA_PORT,
             binascii.unhexlify(config.DATA_HANDSHAKE_REQ),
@@ -270,48 +145,59 @@ def stream_inference_fn(final_prompt):
             recv_exact,
             alive_flag,
             stop_event,
-            model_inputs
+            request,
         ):
-            if isinstance(chunk, str) and chunk.startswith("[ClientError]"):
-                yield f"⚠️ 数据接收异常：{chunk}", ""
-                break
+            kind = evt[0]
 
-            if chunk == "<END>":
+            if kind == "retrieval":
+                query, docs = evt[1], evt[2]
+                retrieval_html = format_retrieved_docs_html(docs)
+                if query:
+                    status = f"✅ 已识别：{query}｜知识库检索完成，开始推理..."
+                else:
+                    status = "✅ 知识库检索完成，开始推理..."
+                yield (
+                    status,
+                    gr.update(),
+                    gr.update(value=retrieval_html),  # 写入内容，保持隐藏，等用户点开
+                    gr.update(interactive=True),      # 开放“查看知识库检索”
+                )
+
+            elif kind == "chunk":
+                partial_md += evt[1]
                 rendered = markdown.markdown(
                     partial_md, extensions=["fenced_code", "tables"]
                 )
                 html = render_mathml_from_latex(rendered)
+                status = (
+                    "🟡 等待服务器停止推理..."
+                    if stop_event.is_set()
+                    else "🟢 推理中..."
+                )
+                yield status, gr.update(value=f"<div>{html}</div>"), gr.update(), gr.update()
 
-                if stop_event.is_set():
-                    yield "🛑 推理已中断。", f"<div>{html}</div>"
-                else:
-                    yield "✅ 推理完成。", f"<div>{html}</div>"
+            elif kind == "error":
+                yield f"⚠️ 数据接收异常：{evt[1]}", gr.update(), gr.update(), gr.update()
+
+            elif kind == "end":
+                rendered = markdown.markdown(
+                    partial_md, extensions=["fenced_code", "tables"]
+                )
+                html = render_mathml_from_latex(rendered)
+                final_status = "🛑 推理已中断。" if stop_event.is_set() else "✅ 推理完成。"
+                yield final_status, gr.update(value=f"<div>{html}</div>"), gr.update(), gr.update()
                 break
 
-            partial_md += chunk
-            rendered = markdown.markdown(
-                partial_md, extensions=["fenced_code", "tables"]
-            )
-            html = render_mathml_from_latex(rendered)
-
-            if stop_event.is_set():
-                yield "🟡 等待服务器停止推理...", f"<div>{html}</div>"
-            else:
-                yield "🟢 推理中...", f"<div>{html}</div>"
-
-    except Exception as e:
-        yield f"⚠️ 数据接收异常：{e}", ""
-        return
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        yield f"⚠️ 数据接收异常：{e}", gr.update(), gr.update(), gr.update()
 
     finally:
         alive = False
-        time.sleep(0.5)
+        time.sleep(0.3)
 
 
 def toggle_retrieval_panel(visible_now):
-    """
-    点击展开 / 点击隐藏知识库检索结果。
-    """
+    """点击展开 / 隐藏知识库检索结果。"""
     new_visible = not bool(visible_now)
     return gr.update(visible=new_visible), new_visible
 
@@ -473,7 +359,6 @@ with gr.Blocks(
                 )
 
                 retrieval_visible_state = gr.State(False)
-                final_prompt_state = gr.State("")
 
         with gr.Column(scale=6):
             gr.Markdown("### 📚 分析与解答", elem_classes="card")
@@ -483,26 +368,24 @@ with gr.Blocks(
                 elem_id="model_output"
             )
 
-    # 第一段：准备请求（检索、构造 prompt、开放按钮）
+    # 第一段：清空上一轮界面状态
     send_evt = btn_send.click(
-        prepare_request_fn,
-        inputs=[audio_inp, text_inp],
+        reset_ui,
+        inputs=None,
         outputs=[
-            status_box,              # 状态
-            output_box,              # 重置输出
-            retrieval_box,           # 写入检索结果 HTML
-            retrieval_box,           # 隐藏检索面板
-            btn_view_kb,             # 开放 / 禁用按钮
-            final_prompt_state,      # 保存最终 prompt
-            retrieval_visible_state  # 重置面板展开状态
+            status_box,
+            output_box,
+            retrieval_box,
+            btn_view_kb,
+            retrieval_visible_state,
         ]
     )
 
-    # 第二段：流式推理（只更新状态和输出，不碰知识库窗口）
+    # 第二段：单连接两阶段流程（检索结果 + 流式推理）
     send_evt.then(
-        stream_inference_fn,
-        inputs=[final_prompt_state],
-        outputs=[status_box, output_box]
+        consult_fn,
+        inputs=[audio_inp, text_inp],
+        outputs=[status_box, output_box, retrieval_box, btn_view_kb]
     )
 
     btn_stop.click(

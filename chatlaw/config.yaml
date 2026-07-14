@@ -12,3 +12,5 @@ HB_TIMEOUT: 3.0
 DATA_HANDSHAKE_REQ: 'A5'
 # 服务器回发
 DATA_HANDSHAKE_RESP: '5A'
+# 推理后端：auto（优先 vllm，缺失则回退 transformers）/ vllm / transformers
+INFERENCE_BACKEND: 'auto'
