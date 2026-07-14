@@ -11,19 +11,22 @@ import socket
 import time
 
 
-def heartbeat_client(server_ip, hb_port, hb_interval, hb_timeout,
+def heartbeat_client(server_ip, hb_port, session_id, hb_interval, hb_timeout,
                      alive_flag, stop_event, recv_exact_fn):
     """
     客户端心跳线程：
-        1. 周期性发送 PING，服务端回 PONG；
-        2. 超过 hb_timeout 收不到 PONG 视为服务端掉线，置位 stop_event；
-        3. UI 触发 stop_event 时，向服务端发送 STOP 并退出。
-    只负责连接存活性检测，不参与数据接收。
+        1. 连接后先上报本次会话的 session_id（32 字节），供服务端把心跳/数据/生成关联；
+        2. 周期性发送 PING，服务端回 PONG；
+        3. 超过 hb_timeout 收不到 PONG 视为服务端掉线，置位 stop_event；
+        4. UI 触发 stop_event 时，向服务端发送 STOP 并退出（只中断本会话生成）。
+    只负责连接存活性检测与停止信号，不参与数据接收。
     """
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(3.0)
     s.connect((server_ip, hb_port))
-    print("[HB] Connected.", flush=True)
+    # 会话注册帧：固定 32 字节的 session_id（uuid4().hex），必须先于任何 PING 发送
+    s.sendall(session_id.encode("ascii"))
+    print(f"[HB] Connected, session={session_id}.", flush=True)
     s.settimeout(1.0)
 
     last_ok = time.time()
@@ -84,6 +87,7 @@ def stream_consultation(server_ip, data_port,
         ("chunk", text:str)                        —— 模型新增文本
         ("end",)                                   —— 推理结束
         ("error", message:str)                     —— 出错信息
+        ("reject", reason:str)                     —— 服务端拒绝（如 transformers 单请求繁忙）
 
     停止语义：stop_event 置位后，仍继续接收 chunk（保证与服务端状态一致），
     但不再把 chunk 透出给 UI，直到收到 end。
@@ -131,6 +135,9 @@ def stream_consultation(server_ip, data_port,
             elif mtype == "chunk":
                 if not suppress_output:
                     yield ("chunk", msg.get("data", ""))
+            elif mtype == "reject":
+                # 服务端拒绝本次请求（如 transformers 单请求模式繁忙），随后会补发 end
+                yield ("reject", msg.get("reason", "服务端拒绝了本次请求"))
             elif mtype == "error":
                 yield ("error", msg.get("message", ""))
                 # 服务端出错后仍会补发 end，这里继续读直到 end

@@ -1,8 +1,8 @@
 accelerate
-vllm
+# vllm
 jieba
 torch>=2.9.0
-gradio==5.49.1
+gradio
 markdown
 pyyaml
 latex2mathml

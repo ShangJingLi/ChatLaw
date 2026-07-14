@@ -35,6 +35,10 @@ class _StopOnEvent(StoppingCriteria):
 
 
 class TransformersStreamEngine:
+    # transformers 的 model.generate 非并发安全（本引擎用锁串行化），因此不支持
+    # 多请求并发；服务端据此启用单请求准入（并发第二个请求会被拒绝）。
+    SUPPORTS_CONCURRENCY = False
+
     def __init__(self, model_dir, tokenizer_dir, max_new_tokens=4096):
         self.model_dir = model_dir
         self.tokenizer_dir = tokenizer_dir
@@ -100,7 +104,7 @@ class TransformersStreamEngine:
                         yield new_text
             finally:
                 gen_thread.join(timeout=30)
-                stop_event.clear()
+                # 不再 clear：stop_event 由会话生命周期（SessionHandle）管理。
 
             if error_box.get("error") is not None:
                 raise error_box["error"]

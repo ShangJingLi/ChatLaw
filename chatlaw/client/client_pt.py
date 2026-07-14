@@ -7,7 +7,19 @@
 
 语音转文字、知识库检索、prompt 构造、分词、推理全部在服务端完成。
 """
+import os
+
+# ===== 必须在 import gradio 之前执行 =====
+# 本机 shell 常驻 ALL_PROXY=socks://... 之类的代理变量；gradio 依赖的 httpx 会在
+# 被 import 时立即用这些变量构造全局 Client，而 socks 代理方案会让 `import gradio`
+# 直接抛异常。客户端是本地 UI（连服务端走裸 socket，不经 HTTP 代理），因此这里清掉
+# 当前进程的代理环境变量，保证 gradio 能正常导入。仅影响本进程，不改动用户 shell。
+for _proxy_var in ("ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy",
+                   "HTTPS_PROXY", "https_proxy"):
+    os.environ.pop(_proxy_var, None)
+
 import time
+import uuid
 import threading
 import binascii
 
@@ -19,13 +31,28 @@ from chatlaw.client.utils.utils_pt import heartbeat_client, stream_consultation
 from chatlaw.configuration import config
 
 
-# ========== 全局状态 ==========
-alive = True
-stop_event = threading.Event()
+# ========== 每会话控制块（去全局化：多标签页 / 多次咨询互不干扰） ==========
+class ControlBlock:
+    """持有「当前这次咨询」的停止信号。
+
+    用 gr.State 持有一个持久的 ControlBlock（每浏览器会话一个）；consult_fn 每次咨询
+    把 stop_event **原地**换成一个新的 Event —— 因为 State 存的是同一个对象引用，停止
+    按钮读到的始终是本次会话的 stop_event，从而不再依赖全局变量、不会误伤其他会话。
+    """
+
+    def __init__(self):
+        self.stop_event = threading.Event()
 
 
-def alive_flag():
-    return alive
+def _new_control():
+    """页面加载时为每个浏览器会话初始化一个持久 ControlBlock。"""
+    return ControlBlock()
+
+
+def stop_consultation(control):
+    """停止按钮：只置位本会话的 stop_event。"""
+    if control is not None:
+        control.stop_event.set()
 
 
 # ========== 展示辅助（纯前端） ==========
@@ -89,13 +116,14 @@ def reset_ui():
     )
 
 
-def consult_fn(input_audio, input_text):
+def consult_fn(input_audio, input_text, control):
     """
     单连接两阶段流程：
         1. 校验输入（语音 / 文本二选一）；
         2. 发送请求 -> 接收检索结果 -> 写入知识库面板（默认隐藏，按钮开放）；
         3. 接收流式推理输出 -> 增量渲染。
 
+    inputs:  [audio, text, control(gr.State: ControlBlock)]
     outputs: [status_box, output_box, retrieval_box, btn_view_kb]
     """
     has_audio = input_audio is not None
@@ -108,16 +136,23 @@ def consult_fn(input_audio, input_text):
         yield "⚠️ 请勿同时输入语音和文本！", gr.update(), gr.update(), gr.update()
         return
 
-    global alive
-    alive = True
-    stop_event.clear()
+    # 本次咨询的独立会话状态（去全局化）：新 session_id + 新 stop_event。
+    # stop_event 原地写入 control，供停止按钮读取到「本次」的 event。
+    session_id = uuid.uuid4().hex
+    stop_event = threading.Event()
+    control.stop_event = stop_event
+    alive = [True]
 
-    # 启动心跳线程（控制通道）
+    def alive_flag():
+        return alive[0]
+
+    # 启动心跳线程（控制通道），先上报 session_id
     threading.Thread(
         target=heartbeat_client,
         args=(
             config.SERVER_IP,
             config.HEARTBEAT_PORT,
+            session_id,
             config.HB_INTERVAL,
             config.HB_TIMEOUT,
             alive_flag,
@@ -127,11 +162,11 @@ def consult_fn(input_audio, input_text):
         daemon=True,
     ).start()
 
-    # 构造请求：客户端只搬运原始音频 / 文本，不做任何模型处理
+    # 构造请求：客户端只搬运原始音频 / 文本，并带上 session_id
     if has_audio:
-        request = {"kind": "audio", "audio": input_audio}  # (sample_rate, ndarray)
+        request = {"session_id": session_id, "kind": "audio", "audio": input_audio}
     else:
-        request = {"kind": "text", "text": input_text.strip()}
+        request = {"session_id": session_id, "kind": "text", "text": input_text.strip()}
 
     yield "🟡 正在连接服务器...", gr.update(), gr.update(), gr.update()
 
@@ -176,6 +211,11 @@ def consult_fn(input_audio, input_text):
                 )
                 yield status, gr.update(value=f"<div>{html}</div>"), gr.update(), gr.update()
 
+            elif kind == "reject":
+                # 服务端拒绝（如 transformers 单请求模式繁忙）
+                yield f"🚫 {evt[1]}", gr.update(), gr.update(), gr.update()
+                break
+
             elif kind == "error":
                 yield f"⚠️ 数据接收异常：{evt[1]}", gr.update(), gr.update(), gr.update()
 
@@ -192,7 +232,7 @@ def consult_fn(input_audio, input_text):
         yield f"⚠️ 数据接收异常：{e}", gr.update(), gr.update(), gr.update()
 
     finally:
-        alive = False
+        alive[0] = False
         time.sleep(0.3)
 
 
@@ -202,9 +242,9 @@ def toggle_retrieval_panel(visible_now):
     return gr.update(visible=new_visible), new_visible
 
 
-with gr.Blocks(
-    title="ChatLaw · 智能法律咨询",
-    css="""
+# Gradio 6.0 起，css / theme 等参数从 Blocks() 迁移到 launch()，
+# 因此这里把自定义样式抽成常量，最终在 demo.launch(css=CUSTOM_CSS) 传入。
+CUSTOM_CSS = """
     body {
         background-color: #f5f7fa;
     }
@@ -242,15 +282,23 @@ with gr.Blocks(
         box-shadow: 0 4px 12px rgba(0,0,0,0.08);
     }
 
+    /* Gradio 6 会给 .block 加内联样式 border-style:solid / overflow:visible，
+       优先级高于外部 CSS，必须用 !important 覆盖，否则出现黑框 / 无法滚动。 */
     #model_output {
-        border: none;
+        border: none !important;
         border-radius: 10px;
         background-color: #ffffff;
         padding: 18px;
         height: 520px;
-        overflow-y: auto;
+        overflow-y: auto !important;
         font-size: 15px;
         line-height: 1.7;
+    }
+
+    /* 语音输入组件：去掉 Gradio 6 默认的黑色 .block 边框，改为与其它输入一致的浅灰边 */
+    #audio_input {
+        border: 1px solid #e5e7eb !important;
+        border-radius: 8px;
     }
 
     .status-box textarea {
@@ -276,11 +324,11 @@ with gr.Blocks(
     #retrieval_panel {
         margin-top: 12px;
         background-color: #f8fafc;
-        border: 1px solid #cbd5e1;
+        border: 1px solid #cbd5e1 !important;
         border-radius: 10px;
         padding: 14px;
         max-height: 260px;
-        overflow-y: auto;
+        overflow-y: auto !important;
         font-size: 14px;
         line-height: 1.7;
     }
@@ -291,7 +339,8 @@ with gr.Blocks(
         color: #64748b;
     }
     """
-) as demo:
+
+with gr.Blocks(title="ChatLaw · 智能法律咨询") as demo:
 
     gr.HTML(
         """
@@ -319,7 +368,8 @@ with gr.Blocks(
                 audio_inp = gr.Audio(
                     sources=["microphone"],
                     type="numpy",
-                    label="🎙️ 中文语音输入（说完整一句）"
+                    label="🎙️ 中文语音输入（说完整一句）",
+                    elem_id="audio_input"
                 )
 
                 text_inp = gr.Textbox(
@@ -359,6 +409,8 @@ with gr.Blocks(
                 )
 
                 retrieval_visible_state = gr.State(False)
+                # 每浏览器会话一个持久 ControlBlock（去全局化的停止信号载体）
+                control_state = gr.State()
 
         with gr.Column(scale=6):
             gr.Markdown("### 📚 分析与解答", elem_classes="card")
@@ -384,14 +436,14 @@ with gr.Blocks(
     # 第二段：单连接两阶段流程（检索结果 + 流式推理）
     send_evt.then(
         consult_fn,
-        inputs=[audio_inp, text_inp],
+        inputs=[audio_inp, text_inp, control_state],
         outputs=[status_box, output_box, retrieval_box, btn_view_kb]
     )
 
     btn_stop.click(
-        lambda: stop_event.set(),
-        None,
-        None
+        stop_consultation,
+        inputs=[control_state],
+        outputs=None
     )
 
     btn_view_kb.click(
@@ -400,6 +452,9 @@ with gr.Blocks(
         outputs=[retrieval_box, retrieval_visible_state]
     )
 
+    # 页面加载时为本浏览器会话初始化 ControlBlock
+    demo.load(_new_control, inputs=None, outputs=[control_state])
+
 
 if __name__ == "__main__":
-    demo.launch(inbrowser=True)
+    demo.launch(css=CUSTOM_CSS, inbrowser=True)

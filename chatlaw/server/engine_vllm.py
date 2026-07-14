@@ -8,9 +8,17 @@
     - ``shutdown()``
 """
 import asyncio
+import os
 import queue
 import threading
 import uuid
+
+# 关闭 flashinfer 采样后端：它会在首次推理时用 nvcc 现场 JIT 编译 CUDA 采样
+# 算子，从而要求部署机装有匹配 GPU 架构的 CUDA 工具链（否则编译/链接失败）。
+# 关掉后改用 vLLM 预编译 kernel，单卡单用户场景性能差异可忽略，却让部署不再
+# 依赖运行期编译器。这是后端行为开关（非动态链接路径），用 setdefault 保证外部
+# 显式设置仍可覆盖；必须在 import vllm 之前设置，子进程 worker 才能继承。
+os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
 
 from vllm import SamplingParams
 from vllm.engine.arg_utils import AsyncEngineArgs
@@ -24,6 +32,9 @@ class VLLMStreamEngine:
     socket 处理线程通过同步生成器读取 chunk，实际请求会进入同一个 vLLM 调度器，
     因此天然支持多请求 continuous batching（多用户并发的基础）。
     """
+
+    # vLLM 天然支持多请求并发（continuous batching），服务端无需单请求准入限制。
+    SUPPORTS_CONCURRENCY = True
 
     _END = object()
 
@@ -51,10 +62,22 @@ class VLLMStreamEngine:
             self.ready.set()
 
     def _create_engine(self):
+        # 单卡消费级 GPU（如 16GB）无法容纳 Qwen3 默认 262144 的上下文所需 KV cache，
+        # 因此显式限制 max_model_len / gpu_memory_utilization，二者可在 config.yaml 调整。
+        from chatlaw.configuration import config
+        max_model_len = int(getattr(config, "MAX_MODEL_LEN", 16384) or 16384)
+        gpu_util = float(getattr(config, "GPU_MEMORY_UTILIZATION", 0.90) or 0.90)
+        # 类比 transformers 的 device_map="auto"：显存装不下权重时把部分权重
+        # offload 到 CPU 内存换取可运行性。0 表示不 offload。
+        cpu_offload_gb = float(getattr(config, "CPU_OFFLOAD_GB", 0) or 0)
+
         engine_args = AsyncEngineArgs(
             model=self.model_dir,
             tokenizer=self.tokenizer_dir,
             dtype="auto",
+            max_model_len=max_model_len,
+            gpu_memory_utilization=gpu_util,
+            cpu_offload_gb=cpu_offload_gb,
             disable_log_stats=True,
             enable_log_requests=False,
         )
@@ -126,7 +149,7 @@ class VLLMStreamEngine:
                     abort_future.result(timeout=2)
                 except Exception:
                     pass
-            stop_event.clear()
+            # 不再 clear：stop_event 由会话生命周期（SessionHandle）管理，单次使用。
 
     def shutdown(self):
         if self.engine is not None:

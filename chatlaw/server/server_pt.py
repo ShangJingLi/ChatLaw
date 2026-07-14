@@ -19,7 +19,13 @@ from funasr_onnx import Paraformer
 
 from chatlaw.dataloader import download_resources
 from chatlaw.configuration import config
-from chatlaw.server.service import heartbeat_server, data_server, InferenceService
+from chatlaw.server.service import (
+    heartbeat_server,
+    data_server,
+    InferenceService,
+    SessionRegistry,
+    BusyGate,
+)
 from chatlaw.server.utils.rag_utils import (
     load_vectorstore,
     load_exact_index,
@@ -86,12 +92,16 @@ def main():
     backend = getattr(config, "INFERENCE_BACKEND", "auto")
     engine = build_engine(backend, model_path, tokenizer_path)
 
-    # === 4. 装配 service ===
-    stop_flag = threading.Event()
+    # === 4. 装配 service（多客户端并发） ===
+    # 每次咨询用各自会话专属的 stop_event（由 registry 管理），不再共享全局 stop_flag。
+    def generate_fn(prompt_token_ids, stop_event):
+        yield from engine.stream(prompt_token_ids, stop_event)
 
-    def generate_fn(prompt_token_ids):
-        # 单用户：所有生成共用一个 stop_flag（心跳 STOP 中断）
-        yield from engine.stream(prompt_token_ids, stop_flag)
+    registry = SessionRegistry()
+    # 引擎是否支持并发决定准入策略：vLLM 并发放行；transformers 单请求（拒绝并发请求）。
+    supports_concurrency = getattr(engine, "SUPPORTS_CONCURRENCY", False)
+    gate = BusyGate(concurrent=supports_concurrency)
+    print(f"[Server] Backend concurrency: {'enabled (vLLM)' if supports_concurrency else 'single-request (transformers)'}")
 
     service = InferenceService(
         tokenizer=tokenizer,
@@ -100,12 +110,14 @@ def main():
         exact_index=exact_index,
         law_name_candidates=law_name_candidates,
         generate_fn=generate_fn,
+        registry=registry,
+        gate=gate,
     )
 
     # === 5. 起服务 ===
     hb_thread = threading.Thread(
         target=heartbeat_server,
-        args=(config.HEARTBEAT_PORT, stop_flag),
+        args=(config.HEARTBEAT_PORT, registry),
         daemon=True,
     )
     hb_thread.start()

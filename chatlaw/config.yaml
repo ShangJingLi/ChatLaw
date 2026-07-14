@@ -14,3 +14,12 @@ DATA_HANDSHAKE_REQ: 'A5'
 DATA_HANDSHAKE_RESP: '5A'
 # 推理后端：auto（优先 vllm，缺失则回退 transformers）/ vllm / transformers
 INFERENCE_BACKEND: 'auto'
+# vLLM 单卡显存占用比例（0~1）；显存越小可适当下调
+GPU_MEMORY_UTILIZATION: 0.90
+# vLLM 上下文长度上限；KV cache 受限（如 16GB 卡）时下调本值，
+# Qwen3 原生上限 262144 在消费级单卡上会因 KV cache 不足而无法启动
+MAX_MODEL_LEN: 16384
+# vLLM 权重 CPU offload（GiB），类比 transformers 的 device_map="auto"：
+# 显存装不下全部权重时，把这么多 GiB 的权重放到 CPU 内存换取可运行性（更慢）。
+# 0 表示不 offload（16GB 卡跑 4B 模型足够）；显存更小的机器可上调。
+CPU_OFFLOAD_GB: 0

@@ -93,12 +93,16 @@ def parse_law_article_query(query: str, law_name_candidates=None):
 
 # ======== 索引加载 ========
 def load_vectorstore(path):
+    # 单卡部署：embedding 模型固定跑 CPU，把整块 GPU 显存让给 vLLM 的 LLM。
+    # 它只用于给用户的短查询编码做 FAISS 检索（单用户、毫秒级），CPU 足够；
+    # 若放 GPU 会与 vLLM 抢显存，导致引擎初始化 CUDA out of memory。
     embeddings = HuggingFaceEmbeddings(
         model_name=os.path.join(
             get_resources_path(),
             "vectorstore",
             "embedding_model"
         ),
+        model_kwargs={"device": "cpu"},
         encode_kwargs={"normalize_embeddings": True},
     )
 
